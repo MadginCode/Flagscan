@@ -48,10 +48,9 @@ The check uses your operating system's certificate store, so it works behind TLS
 
 ### Publishing a release
 
-1. Bump `version` in `Cargo.toml`, commit.
-2. `git tag v0.2.0 && git push --tags`
+Bump `version` in `Cargo.toml` and push to `main`. If no tag exists for that version yet, `.github/workflows/release.yml` builds Linux (x86_64, arm64), macOS (Apple silicon, Intel) and Windows (x64), creates the `vX.Y.Z` tag, and publishes the release with the archives plus `SHA256SUMS`. Pushes that don't change the version publish nothing.
 
-`.github/workflows/release.yml` builds Linux (x86_64, arm64), macOS (Apple silicon, Intel) and Windows (x64), and attaches the archives plus `SHA256SUMS` to the release. The tag must match the Cargo version or the workflow stops.
+You can also push a tag yourself (`git tag v0.3.0 && git push --tags`); it must match the Cargo version or the workflow stops.
 
 If you fork or rename the repo, change `REPO_OWNER` / `REPO_NAME` in `src/update.rs`.
 

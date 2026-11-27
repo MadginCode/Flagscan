@@ -1,6 +1,6 @@
 [package]
 name = "flagscan"
-version = "0.1.1"
+version = "0.2.0"
 description = "Auto-scan files and folders for CTF flags through chained decoders"
 license = "MIT"
 repository = "https://github.com/MadginCode/Flagscan"

@@ -1,16 +1,44 @@
 name: release
 
-# Push a tag like v0.2.0 (matching the version in Cargo.toml) to build and publish binaries.
+# Releases are published two ways:
+#   - bump `version` in Cargo.toml and push to main: if no tag exists for that version yet, this
+#     workflow builds, creates the tag and publishes the release;
+#   - or push a tag like v0.2.0 yourself (it must match Cargo.toml).
 # Running copies of flagscan find the new release and offer to update themselves.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
 
 permissions:
   contents: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        shell: bash
+        run: |
+          tag="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            [ "$GITHUB_REF_NAME" = "$tag" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml $tag"; exit 1; }
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "$tag already released; nothing to do"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: version
+    if: needs.version.outputs.release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -28,12 +56,6 @@ jobs:
       WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
     steps:
       - uses: actions/checkout@v5
-
-      - name: Check tag matches Cargo.toml version
-        shell: bash
-        run: |
-          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != v$v"; exit 1; }
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -83,7 +105,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          name="flagscan-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="flagscan-${{ needs.version.outputs.tag }}-${{ matrix.target }}"
           cd target/${{ matrix.target }}/release
           if [[ "${{ matrix.target }}" == *windows* ]]; then
             7z a "$GITHUB_WORKSPACE/$name.zip" flagscan.exe
@@ -97,7 +119,7 @@ jobs:
           path: flagscan-*
 
   publish:
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -107,6 +129,8 @@ jobs:
         run: sha256sum flagscan-* > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: |
             flagscan-*
             SHA256SUMS

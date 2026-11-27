@@ -238,5 +238,19 @@ subprocess.run(["zip", "-j", "-q", "-P", "s3cr3t_ctf_pw", wlzip, "/tmp/_wlflag.t
 expected.append(F("wordlist_crack"))
 open(os.path.join(os.path.dirname(OUT.rstrip("/")), "wordlist.txt"), "w").write("wrong\nnope\ns3cr3t_ctf_pw\nmore\n")
 
+# --- QR codes ---
+try:
+    import qrcode
+    qimg = io.BytesIO(); qrcode.make(F("qr_plain")).save(qimg, "PNG")
+    w("41_qr.png", qimg.getvalue(), F("qr_plain"))
+    # QR carrying base64, to exercise chaining
+    qb = io.BytesIO(); qrcode.make(base64.b64encode(F("qr_b64").encode()).decode()).save(qb, "PNG")
+    w("42_qr_b64.png", qb.getvalue(), F("qr_b64"))
+    # QR PNG hidden in the LSB of a cover image
+    qp = io.BytesIO(); qrcode.make(F("qr_lsb")).save(qp, "PNG")
+    w("43_qr_lsb.png", lsb_embed(qp.getvalue(), size=(360, 300)), F("qr_lsb"))
+except ImportError:
+    print("qrcode module not installed; skipping QR fixtures")
+
 open(os.path.join(os.path.dirname(OUT.rstrip("/")), "expected.txt"), "w").write("\n".join(expected) + "\n")
 print(len(expected), "flags hidden")

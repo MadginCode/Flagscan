@@ -11,6 +11,7 @@ pub mod containers;
 pub mod encodings;
 pub mod formats;
 pub mod stego;
+pub mod qr;
 pub mod report;
 pub mod util;
 
@@ -404,6 +405,9 @@ impl<'a> Scanner<'a> {
             }
             if m.stego && !node.origin.lsb {
                 stego::expand(data, kind, &mut kids, &mut notes);
+            }
+            if m.qr {
+                qr::expand(data, kind, &mut kids, &mut notes);
             }
             if m.carving {
                 carve::expand(data, kind, self.cfg.max_node_size, &mut kids);

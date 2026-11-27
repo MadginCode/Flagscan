@@ -24,6 +24,7 @@ Every derived blob is scanned again, so these chain in any order up to the depth
 | Encodings | base64, base64url, base32, base45, base58, base62, base91, ascii85, hex (plain, `de:ad`, `\x41`, `0x41`), binary, decimal, octal, URL, HTML entities, quoted-printable, uuencode, Morse, Bacon, Brainfuck, Ook, UTF-16 LE/BE strings |
 | Archives | zip (with password guessing + wordlist), tar, 7z (with password guessing + wordlist), gzip, zlib, bzip2, xz, lzma, zstd |
 | Metadata | EXIF; PNG text chunks, unknown chunks, data after IEND, IHDR CRC mismatch (brute-forces the real width/height and gives you the repaired image), pixel data taller than the header; JPEG comments and data after EOI; PDF streams; pcap/pcapng TCP/UDP/ICMP flows, DNS query names (and joined first labels for exfil), USB keyboard keystrokes; repaired PNG/JPEG signatures |
+| QR / barcodes | QR, Data Matrix, Aztec, PDF417 and common 1D barcodes, decoded from any image (including carved, repaired, or LSB-extracted images) |
 | Embedded files | binwalk-style carving by magic bytes |
 | LSB stego | zsteg-style bit planes for PNG/BMP/GIF/TIFF/WebP (R, G, B, A, RGB, BGR, RGBA; 1 and 2 bits; both bit orders; row and column order) and WAV samples |
 | Ciphers | single-byte and short repeating-key XOR, Caesar (any shift), ROT13, ROT47, Atbash, and Vigenere, all recovered by known plaintext on your flag prefix (fast on big files); whole files XORed to hide a PNG/zip/PDF header; reversed data |

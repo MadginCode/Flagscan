@@ -156,7 +156,7 @@ const api = (url, opts = {}) => fetch(url, { ...opts, headers: { 'x-flagscan': '
 
 const MODS = [
   ['encodings', 'Encodings'], ['archives', 'Archives'], ['metadata', 'Metadata'], ['carving', 'Embedded files'],
-  ['stego', 'LSB stego'], ['xor', 'XOR'], ['rot', 'ROT / reverse'],
+  ['stego', 'LSB stego'], ['xor', 'XOR'], ['rot', 'ROT / Vigenère'], ['qr', 'QR / barcodes'],
 ];
 let formats = [];
 let job = null, timer = null;

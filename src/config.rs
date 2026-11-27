@@ -20,13 +20,15 @@ pub struct Modules {
     pub stego: bool,
     /// single and short repeating-key XOR (known-plaintext on the flag prefix)
     pub xor: bool,
-    /// Caesar / ROT-N, ROT47, Atbash, reversed text
+    /// Caesar / ROT-N, ROT47, Atbash, Vigenere, reversed text
     pub rot: bool,
+    /// QR codes and barcodes in images
+    pub qr: bool,
 }
 
 impl Default for Modules {
     fn default() -> Self {
-        Self { encodings: true, archives: true, metadata: true, carving: true, stego: true, xor: true, rot: true }
+        Self { encodings: true, archives: true, metadata: true, carving: true, stego: true, xor: true, rot: true, qr: true }
     }
 }
 

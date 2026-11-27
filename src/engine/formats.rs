@@ -287,9 +287,25 @@ fn pcap(d: &[u8], ng: bool, kids: &mut Vec<Child>, notes: &mut Vec<String>) {
     if ng { pcapng_packets(d, &mut fl) } else { pcap_packets(d, &mut fl) };
     let total = fl.data.len();
     for (k, v) in fl.data.into_iter().take(1000) {
-        if !v.is_empty() {
-            kids.push(Child::new(k, v).artifact());
+        if v.is_empty() {
+            continue;
         }
+        // Pull files/bodies out of HTTP exchanges carried on this stream.
+        for (label, body) in super::http::extract(&v) {
+            kids.push(Child::new(format!("{k} {label}"), body).artifact());
+        }
+        // Note FTP control-channel transfers (the data itself arrives on its own stream).
+        if k.contains(":21 ") || k.ends_with(":21") {
+            for line in v.split(|&b| b == b'\n') {
+                let s = String::from_utf8_lossy(line);
+                for cmd in ["RETR ", "STOR "] {
+                    if let Some(name) = s.trim().strip_prefix(cmd) {
+                        notes.push(format!("FTP {}transfer of '{}' (file is on a separate data stream)", if cmd == "STOR " { "upload " } else { "" }, name.trim()));
+                    }
+                }
+            }
+        }
+        kids.push(Child::new(k, v).artifact());
     }
     if total > 1000 {
         notes.push(format!("{total} flows; only the first 1000 were extracted"));

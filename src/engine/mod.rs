@@ -11,6 +11,7 @@ pub mod containers;
 pub mod encodings;
 pub mod formats;
 pub mod stego;
+pub mod http;
 pub mod qr;
 pub mod report;
 pub mod util;

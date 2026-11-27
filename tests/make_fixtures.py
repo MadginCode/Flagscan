@@ -238,6 +238,18 @@ subprocess.run(["zip", "-j", "-q", "-P", "s3cr3t_ctf_pw", wlzip, "/tmp/_wlflag.t
 expected.append(F("wordlist_crack"))
 open(os.path.join(os.path.dirname(OUT.rstrip("/")), "wordlist.txt"), "w").write("wrong\nnope\ns3cr3t_ctf_pw\nmore\n")
 
+# --- HTTP file extraction (gzip + chunked response) ---
+def tcp_stream(sp, dp, payload):
+    return eth(ipv4(6, [10, 0, 0, 9], [10, 0, 0, 8], tcp(sp, dp, 3000, payload)))
+gzbody = gzip.compress(b"<p>download: " + F("http_gzip").encode() + b"</p>")
+httpresp = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n" + b"%x\r\n" % len(gzbody) + gzbody + b"\r\n0\r\n\r\n"
+w("44_http_gzip.pcap", pcap([tcp_stream(80, 7777, httpresp)]), F("http_gzip"))
+
+bnd = "----ctfboundary"
+mpbody = ("--%s\r\nContent-Disposition: form-data; name=\"f\"; filename=\"flag.txt\"\r\n\r\n%s\r\n--%s--\r\n" % (bnd, F("http_upload"), bnd)).encode()
+httpreq = b"POST /u HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=" + bnd.encode() + b"\r\nContent-Length: %d\r\n\r\n" % len(mpbody) + mpbody
+w("45_http_upload.pcap", pcap([tcp_stream(8888, 80, httpreq)]), F("http_upload"))
+
 # --- QR codes ---
 try:
     import qrcode

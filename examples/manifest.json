@@ -1,0 +1,288 @@
+{
+ "version": 1,
+ "wordlist": "wordlist.txt",
+ "examples": [
+  {
+   "file": "01_plain.txt",
+   "technique": "Flag in plain text",
+   "flag": "flag{plain_text}",
+   "visual": false
+  },
+  {
+   "file": "02_b64.txt",
+   "technique": "Base64",
+   "flag": "flag{base64_one}",
+   "visual": false
+  },
+  {
+   "file": "03_triple.txt",
+   "technique": "Base64 applied three times",
+   "flag": "flag{triple_b64}",
+   "visual": false
+  },
+  {
+   "file": "04_rot13_hex.txt",
+   "technique": "ROT13, then hex",
+   "flag": "flag{rot13_then_hex}",
+   "visual": false
+  },
+  {
+   "file": "05_xor.bin",
+   "technique": "Single-byte XOR inside binary noise",
+   "flag": "flag{single_xor}",
+   "visual": false
+  },
+  {
+   "file": "06_repxor.bin",
+   "technique": "Repeating-key XOR (2-byte key)",
+   "flag": "flag{repeat_xor}",
+   "visual": false
+  },
+  {
+   "file": "07_caesar.txt",
+   "technique": "Caesar shift 7",
+   "flag": "flag{caesar_seven}",
+   "visual": false
+  },
+  {
+   "file": "08_trailer.png",
+   "technique": "Zip appended after PNG end, containing gzip of base64",
+   "flag": "flag{deep_chain}",
+   "visual": false
+  },
+  {
+   "file": "09_lsb.png",
+   "technique": "LSB steganography (RGB, bit 0)",
+   "flag": "flag{lsb_hidden}",
+   "visual": false
+  },
+  {
+   "file": "10_lsb_b64.png",
+   "technique": "LSB steganography carrying base64",
+   "flag": "flag{lsb_b64}",
+   "visual": false
+  },
+  {
+   "file": "11_short.png",
+   "technique": "PNG with its height cut; flagscan restores the full image (see Extracted files)",
+   "flag": null,
+   "visual": true
+  },
+  {
+   "file": "12_text.png",
+   "technique": "Base32 in a PNG tEXt chunk",
+   "flag": "flag{png_text_b32}",
+   "visual": false
+  },
+  {
+   "file": "13_exif.jpg",
+   "technique": "Reversed text in EXIF ImageDescription",
+   "flag": "flag{exif_reversed}",
+   "visual": false
+  },
+  {
+   "file": "14_locked.zip",
+   "technique": "Password-protected zip (common password), base64 inside",
+   "flag": "flag{zip_password}",
+   "visual": false
+  },
+  {
+   "file": "15_archive.tar.xz",
+   "technique": "URL-encoded text inside tar.xz",
+   "flag": "flag{url_encoded_tar}",
+   "visual": false
+  },
+  {
+   "file": "16_http.pcap",
+   "technique": "HTTP response split across TCP packets",
+   "flag": "flag{pcap_split}",
+   "visual": false
+  },
+  {
+   "file": "17_dns.pcap",
+   "technique": "Base64 exfiltrated in DNS query names",
+   "flag": "flag{dns_exfil}",
+   "visual": false
+  },
+  {
+   "file": "18_usb.pcap",
+   "technique": "USB keyboard keystrokes",
+   "flag": "flag{usb_keys}",
+   "visual": false
+  },
+  {
+   "file": "19_wide.bin",
+   "technique": "UTF-16 string inside binary noise",
+   "flag": "flag{utf16_wide}",
+   "visual": false
+  },
+  {
+   "file": "20_morse.txt",
+   "technique": "Morse code",
+   "flag": "FLAG{MORSE}",
+   "visual": false
+  },
+  {
+   "file": "21_audio.wav",
+   "technique": "LSB steganography in WAV samples",
+   "flag": "flag{wav_lsb}",
+   "visual": false
+  },
+  {
+   "file": "22_doc.pdf",
+   "technique": "Compressed PDF stream",
+   "flag": "flag{pdf_stream}",
+   "visual": false
+  },
+  {
+   "file": "23_bz2.b64",
+   "technique": "Base64 of bzip2",
+   "flag": "flag{bzip2_inside}",
+   "visual": false
+  },
+  {
+   "file": "24_zstd.bin",
+   "technique": "Zstandard-compressed",
+   "flag": "flag{zstd_payload}",
+   "visual": false
+  },
+  {
+   "file": "25_xored.dat",
+   "technique": "Whole PNG XORed with 0x42, flag in a text chunk",
+   "flag": "flag{xored_png}",
+   "visual": false
+  },
+  {
+   "file": "26_a85.txt",
+   "technique": "Ascii85",
+   "flag": "flag{ascii85}",
+   "visual": false
+  },
+  {
+   "file": "27_b58.txt",
+   "technique": "Base58",
+   "flag": "flag{base58_ok}",
+   "visual": false
+  },
+  {
+   "file": "28_bin.txt",
+   "technique": "Binary (01100110 ...)",
+   "flag": "flag{binary_str}",
+   "visual": false
+  },
+  {
+   "file": "29_lsb_zip.png",
+   "technique": "Zip hidden in LSB, base64 inside",
+   "flag": "flag{lsb_zip_b64}",
+   "visual": false
+  },
+  {
+   "file": "30_locked.7z",
+   "technique": "Password-protected 7z (common password)",
+   "flag": "flag{seven_zip_pw}",
+   "visual": false
+  },
+  {
+   "file": "33_xorzip.bin",
+   "technique": "Zip XORed with a 3-byte key",
+   "flag": "flag{xor3_zip}",
+   "visual": false
+  },
+  {
+   "file": "34_b45.txt",
+   "technique": "Base45",
+   "flag": "flag{base45_ok}",
+   "visual": false
+  },
+  {
+   "file": "35_b91.txt",
+   "technique": "Base91",
+   "flag": "flag{base91_ok}",
+   "visual": false
+  },
+  {
+   "file": "36_uu.txt",
+   "technique": "Uuencode",
+   "flag": "flag{uuencoded}",
+   "visual": false
+  },
+  {
+   "file": "38_brainfuck.txt",
+   "technique": "Brainfuck program that prints the flag",
+   "flag": "flag{brainfuck_ok}",
+   "visual": false
+  },
+  {
+   "file": "39_vigenere.txt",
+   "technique": "Vigenere cipher, key recovered from the flag prefix",
+   "flag": "flag{vigenere_ok}",
+   "visual": false
+  },
+  {
+   "file": "40_wordlist.zip",
+   "technique": "Zip whose password is only in wordlist.txt",
+   "flag": "flag{wordlist_crack}",
+   "visual": false
+  },
+  {
+   "file": "41_qr.png",
+   "technique": "QR code",
+   "flag": "flag{qr_plain}",
+   "visual": false
+  },
+  {
+   "file": "42_qr_b64.png",
+   "technique": "QR code carrying base64",
+   "flag": "flag{qr_b64}",
+   "visual": false
+  },
+  {
+   "file": "43_qr_lsb.png",
+   "technique": "QR code image hidden in LSB",
+   "flag": "flag{qr_lsb}",
+   "visual": false
+  },
+  {
+   "file": "44_http_gzip.pcap",
+   "technique": "Gzip + chunked HTTP response in a pcap",
+   "flag": "flag{http_gzip}",
+   "visual": false
+  },
+  {
+   "file": "45_http_upload.pcap",
+   "technique": "File uploaded via multipart HTTP POST in a pcap",
+   "flag": "flag{http_upload}",
+   "visual": false
+  },
+  {
+   "file": "46_pdf_filters.pdf",
+   "technique": "PDF streams with LZW and ASCIIHex filters",
+   "flag": "flag{pdf_hex}",
+   "visual": false
+  },
+  {
+   "file": "47_macro.doc",
+   "technique": "VBA macro in an Office (OLE) document",
+   "flag": "flag{vba_macro}",
+   "visual": false
+  },
+  {
+   "file": "deep/nested/dir/31_reverse_b64.txt",
+   "technique": "Reversed base64, nested in subfolders",
+   "flag": "flag{reverse_then_b64}",
+   "visual": false
+  },
+  {
+   "file": "visual/plane.png",
+   "technique": "Flag drawn into blue bit 0: open it in Stego tools > bit planes",
+   "flag": null,
+   "visual": true
+  },
+  {
+   "file": "visual/spectrogram.wav",
+   "technique": "Flag drawn into the spectrogram: open it in Stego tools",
+   "flag": null,
+   "visual": true
+  }
+ ]
+}

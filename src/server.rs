@@ -84,6 +84,9 @@ pub async fn serve(opts: ServeOpts) -> anyhow::Result<()> {
         .route("/api/jobs/{id}/artifacts/{aid}/planes", get(artifact_planes))
         .route("/api/jobs/{id}/artifacts/{aid}/spectrogram", get(artifact_spectrogram))
         .route("/api/jobs/{id}/report", get(report))
+        .route("/api/examples", get(examples_list))
+        .route("/api/examples/scan", post(examples_scan))
+        .route("/api/examples/view", get(examples_view))
         .route("/api/tools/planes", post(tool_planes).layer(DefaultBodyLimit::disable()))
         .route("/api/tools/spectrogram", post(tool_spectrogram).layer(DefaultBodyLimit::disable()))
         .route("/api/update", get(update_status).post(update_apply))
@@ -348,6 +351,58 @@ async fn artifact_spectrogram(State(st): S, AxPath((id, aid)): AxPath<(String, u
         Ok(png) => png_response(png),
         Err(e) => err(StatusCode::BAD_REQUEST, e),
     }
+}
+
+async fn examples_list() -> Json<crate::engine::examples::Manifest> {
+    Json(crate::engine::examples::manifest())
+}
+
+/// Unpack the built-in examples into a temp folder owned by the new job, and scan them with
+/// fixed settings so the outcome is the same on every machine.
+async fn examples_scan(State(st): S) -> Response {
+    use crate::engine::examples;
+    let dir = match tempfile::Builder::new().prefix("flagscan-examples-").tempdir() {
+        Ok(d) => d,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    if let Err(e) = examples::extract(dir.path()) {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"));
+    }
+    let cfg = examples::config(dir.path());
+    let root = dir.path().to_path_buf();
+    match new_job(&st, cfg, vec![root], Some(dir)) {
+        Ok(id) => Json(serde_json::json!({ "job": id })).into_response(),
+        Err(r) => r,
+    }
+}
+
+#[derive(Deserialize)]
+struct ViewQuery {
+    file: String,
+    mode: String,
+}
+
+/// Render a visual example (bit planes or spectrogram) straight from the embedded bundle.
+async fn examples_view(axum::extract::Query(q): axum::extract::Query<ViewQuery>) -> Response {
+    let known = crate::engine::examples::manifest().examples.iter().any(|e| e.file == q.file);
+    let Some(data) = known.then(|| crate::engine::examples::read(&q.file)).flatten() else {
+        return err(StatusCode::NOT_FOUND, "unknown example");
+    };
+    match q.mode.as_str() {
+        "planes" => planes_json(&data),
+        "spectrogram" => match crate::engine::tools::spectrogram(&data) {
+            Ok(png) => png_response(png),
+            Err(e) => err(StatusCode::BAD_REQUEST, e),
+        },
+        _ => png_or_raw(data),
+    }
+}
+
+fn png_or_raw(data: Vec<u8>) -> Response {
+    let mut h = HeaderMap::new();
+    let ct = if data.starts_with(b"\x89PNG") { "image/png" } else { "application/octet-stream" };
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(ct));
+    (h, Body::from(data)).into_response()
 }
 
 async fn first_upload(mp: &mut Multipart) -> Option<Vec<u8>> {

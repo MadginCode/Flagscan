@@ -11,6 +11,7 @@ pub mod containers;
 pub mod encodings;
 pub mod formats;
 pub mod stego;
+pub mod examples;
 pub mod http;
 pub mod ole;
 pub mod tools;

@@ -71,6 +71,15 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Unpack the built-in example challenges, or scan them as a self-test (--scan)
+    Examples {
+        /// Folder to write the examples into
+        #[arg(long, default_value = "flagscan-examples")]
+        out: PathBuf,
+        /// Scan the examples and report which ones were solved (works as a self-test)
+        #[arg(long)]
+        scan: bool,
+    },
     /// Watch a folder and scan each new or changed file as it appears
     Watch {
         /// Folder to watch
@@ -152,6 +161,39 @@ fn main() -> anyhow::Result<()> {
                 }
             } else if !res.notes.is_empty() {
                 println!("({} notes, run with -v to see them)", res.notes.len());
+            }
+            Ok(())
+        }
+        Cmd::Examples { out, scan } => {
+            use flagscan::engine::examples;
+            let m = examples::manifest();
+            if !scan {
+                examples::extract(&out)?;
+                println!("Wrote {} example challenges to {}\n", m.examples.len(), out.display());
+                for e in &m.examples {
+                    println!("  {:<38} {}", e.file, e.technique);
+                }
+                println!("\nTry them:");
+                println!("  flagscan scan {0} --wordlist {0}/{1}", out.display(), m.wordlist);
+                println!("or start the web UI (flagscan) and click \"Try the built-in examples\".");
+                return Ok(());
+            }
+            // Self-test: scan into a temp folder unless --out was given explicitly.
+            let tmp = tempfile::tempdir()?;
+            let dir = if out.as_os_str() == "flagscan-examples" { tmp.path().to_path_buf() } else { out.clone() };
+            examples::extract(&dir)?;
+            let res = engine::scan_blocking(&examples::config(&dir), &[dir.clone()], None)?;
+            let results = examples::check(&res);
+            let found = results.iter().filter(|(_, ok)| *ok).count();
+            for (e, ok) in &results {
+                println!("{}  {:<38} {}", if *ok { "found " } else { "MISSED" }, e.file, e.technique);
+            }
+            for e in m.examples.iter().filter(|e| e.visual) {
+                println!("view    {:<38} {}", e.file, e.technique);
+            }
+            println!("\n{found} of {} examples solved in {:.1}s", results.len(), res.stats.elapsed_ms as f64 / 1000.0);
+            if found < results.len() {
+                std::process::exit(1);
             }
             Ok(())
         }

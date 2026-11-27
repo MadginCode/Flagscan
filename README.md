@@ -15,6 +15,21 @@ flagscan update                # install the latest release
 
 `flagscan scan --help` lists all options. Settings saved in the web UI ("Save as default") also apply to the CLI; `flagscan config-path` shows where they live.
 
+## Try it on the built-in examples
+
+flagscan ships with 47 small challenges, one per technique (base64 chains, XOR, LSB, QR codes, pcaps, Office macros, and so on), so you can see what it does before using it on a real CTF.
+
+- **Web UI**: click **Try the built-in examples**. A checklist shows each technique and whether it was solved; the visual ones (a flag drawn into a bit plane or a spectrogram) open straight in the Stego tools.
+- **Terminal**:
+
+  ```sh
+  flagscan examples                 # writes them to ./flagscan-examples and lists what each one teaches
+  flagscan scan flagscan-examples --wordlist flagscan-examples/wordlist.txt
+  flagscan examples --scan          # self-test: scans them and reports solved / missed
+  ```
+
+`flagscan examples --scan` exits non-zero if any example is missed, so it also works as a quick check that a build behaves correctly on your machine. The bundle is regenerated with `python3 examples/build.py target/release/flagscan`.
+
 ## What it looks through
 
 Every derived blob is scanned again, so these chain in any order up to the depth limit (default 10).

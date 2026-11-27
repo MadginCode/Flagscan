@@ -22,3 +22,5 @@ jobs:
           sort target/fixtures/expected.txt > expected.txt
           missing=$(comm -23 expected.txt found.txt)
           if [ -n "$missing" ]; then echo "missing flags:"; echo "$missing"; exit 1; fi
+      - name: Built-in examples self-test
+        run: ./target/release/flagscan examples --scan

@@ -28,6 +28,8 @@
   }
 }
 * { box-sizing: border-box; }
+/* Author display rules (e.g. #modal { display: flex }) must not override the hidden attribute. */
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -108,6 +110,17 @@ nav.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: va
 .planeGrid img { width: 100%; border: 1px solid var(--line); border-radius: 4px; }
 .hex { font-family: var(--mono); font-size: 12px; white-space: pre; line-height: 1.45; margin: 0; }
 .spinner { color: var(--steel); padding: 20px; }
+.examplesLine { margin: 12px 0 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.examplesLine .hint { margin: 0; }
+#exampleBoard { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin: 6px 0 14px; }
+#exampleBoard summary { cursor: pointer; }
+.exlist { list-style: none; margin: 10px 0 0; padding: 0; columns: 2 420px; column-gap: 28px; }
+.exlist li { display: grid; grid-template-columns: 56px minmax(0, 15ch) 1fr; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 13px; break-inside: avoid; }
+.exlist code { font-family: var(--mono); font-size: 12px; color: var(--steel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mark { font-size: 11.5px; font-weight: 600; border-radius: 3px; padding: 0 5px; text-align: center; color: var(--steel); }
+.mark.ok { background: var(--tag); color: var(--tag-ink); }
+.mark.miss { color: var(--bad); border: 1px solid var(--bad); }
+.mark.look { border: 1px dashed var(--steel); }
 </style>
 </head>
 <body>
@@ -151,8 +164,10 @@ nav.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: va
     <input type="file" id="fileIn" multiple hidden>
     <input type="file" id="dirIn" webkitdirectory hidden>
   </div>
+  <p class="examplesLine">New here? <button class="btn ghost" id="tryExamples">Try the built-in examples</button> <span class="hint">47 small challenges, one per technique, bundled with the app.</span></p>
 
   <div id="status" role="status"></div>
+  <div id="exampleBoard" hidden></div>
   <div id="flags"></div>
 
   <nav class="tabs" role="tablist" id="tabs" hidden>
@@ -306,10 +321,48 @@ $('#pickDir').onclick = () => $('#dirIn').click();
 $('#fileIn').onchange = e => uploadFiles([...e.target.files].map(f => ({ file: f, path: f.name })));
 $('#dirIn').onchange = e => uploadFiles([...e.target.files].map(f => ({ file: f, path: f.webkitRelativePath || f.name })));
 
-function follow(id) {
+let examplesMode = false, exampleManifest = null;
+function follow(id, examples = false) {
   job = id; clearTimeout(timer);
+  examplesMode = examples;
+  $('#exampleBoard').hidden = !examples;
+  $('#exampleBoard').innerHTML = '';
   $('#flags').innerHTML = ''; $('#notes').innerHTML = ''; $('#arts').innerHTML = '';
   poll();
+}
+
+$('#tryExamples').onclick = async () => {
+  setStatus('Unpacking the examples…');
+  if (!exampleManifest) exampleManifest = await (await api('/api/examples')).json();
+  const r = await api('/api/examples/scan', { method: 'POST' });
+  const j = await r.json();
+  if (!r.ok) return setStatus(`<span class="err">${esc(j.error)}</span>`);
+  follow(j.job, true);
+};
+
+// Checklist of every example: solved, missed, or "inspect it yourself" for the visual ones.
+function renderExamples(s) {
+  if (!examplesMode || !exampleManifest) return;
+  const found = new Set(s.findings.map(f => f.flag));
+  const done = s.stats.state && s.stats.state !== 'running';
+  const withFlag = exampleManifest.examples.filter(e => e.flag);
+  const solved = withFlag.filter(e => found.has(e.flag)).length;
+  const rows = exampleManifest.examples.map(e => {
+    let mark, cls;
+    if (e.visual) { mark = 'look'; cls = 'look'; }
+    else if (found.has(e.flag)) { mark = 'solved'; cls = 'ok'; }
+    else { mark = done ? 'missed' : '…'; cls = done ? 'miss' : ''; }
+    const view = e.file.endsWith('.wav') ? 'spectrogram' : 'planes';
+    const act = e.visual && e.file.startsWith('visual/')
+      ? ` <button class="link" data-view="${esc(e.file)}" data-mode="${view}">open in ${view === 'planes' ? 'bit planes' : 'spectrogram'}</button>` : '';
+    return `<li><span class="mark ${cls}">${mark}</span><code>${esc(e.file)}</code><span>${esc(e.technique)}${act}</span></li>`;
+  }).join('');
+  $('#exampleBoard').innerHTML = `<details ${done ? '' : 'open'}><summary><strong>Examples: ${solved} of ${withFlag.length} solved</strong>${done ? ' — click to see each technique' : ''}</summary><ul class="exlist">${rows}</ul></details>`;
+  $('#exampleBoard').querySelectorAll('button[data-view]').forEach(b => b.onclick = () => {
+    const url = `/api/examples/view?file=${encodeURIComponent(b.dataset.view)}&mode=${b.dataset.mode}`;
+    if (b.dataset.mode === 'planes') showPlanes(url, 'Bit planes — ' + b.dataset.view);
+    else showImage(url, 'Spectrogram — ' + b.dataset.view);
+  });
 }
 
 async function poll() {
@@ -342,6 +395,7 @@ function render(s) {
       <a class="btn ghost" href="/api/jobs/${job}/report?json=1" download>.json</a>`);
   }
 
+  renderExamples(s);
   if (s.findings.length) {
     $('#flags').innerHTML = s.findings.map((f, i) => `
       <article class="flag">
@@ -402,7 +456,7 @@ async function showImage(url, title) {
     const r = await api(url);
     if (!r.ok) { $('#modalBody').innerHTML = `<p class="err">${esc((await r.json()).error)}</p>`; return; }
     const blob = await r.blob();
-    $('#modalBody').innerHTML = `<img src="${URL.createObjectURL(blob)}" style="max-width:100%">`;
+    $('#modalBody').innerHTML = `<img src="${URL.createObjectURL(blob)}" style="width:100%;max-width:960px">`;
   } catch (e) { $('#modalBody').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 async function showHex(url, name) {
@@ -433,7 +487,7 @@ async function toolUpload(file) {
     if (!r.ok) { $('#modalBody').innerHTML = `<p class="err">${esc((await r.json()).error)}</p>`; return; }
     if (isWav) {
       const blob = await r.blob();
-      $('#modalBody').innerHTML = `<img src="${URL.createObjectURL(blob)}" style="max-width:100%">`;
+      $('#modalBody').innerHTML = `<img src="${URL.createObjectURL(blob)}" style="width:100%;max-width:960px">`;
     } else {
       const j = await r.json();
       $('#modalBody').innerHTML = `<div class="planeGrid">${j.planes.map(p => `<figure><img src="${p.src}" alt="${esc(p.label)}"><figcaption>${esc(p.label)}</figcaption></figure>`).join('')}</div>`;

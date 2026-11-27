@@ -18,7 +18,7 @@ jobs:
           python3 -m pip install --quiet pillow py7zr zstandard
           python3 tests/make_fixtures.py target/fixtures/files
           cargo build --release --locked
-          ./target/release/flagscan scan target/fixtures/files -f flag | grep -v '^ ' | sort > found.txt
+          ./target/release/flagscan scan target/fixtures/files -f flag --wordlist target/fixtures/wordlist.txt | grep -v '^ ' | sort > found.txt
           sort target/fixtures/expected.txt > expected.txt
           missing=$(comm -23 expected.txt found.txt)
           if [ -n "$missing" ]; then echo "missing flags:"; echo "$missing"; exit 1; fi

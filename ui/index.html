@@ -117,9 +117,12 @@ nav.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: va
   <h2>Archive passwords</h2>
   <textarea id="pw" rows="3" placeholder="one per line" spellcheck="false"></textarea>
   <p class="hint">Tried on encrypted zip and 7z files, along with a short common list and your flag prefixes.</p>
+  <input type="text" id="wordlist" placeholder="wordlist file path (e.g. rockyou.txt)" spellcheck="false" style="margin-top:6px">
 
   <h2>Limits</h2>
   <label class="row">Chain depth <input type="number" id="depth" min="1" max="40" style="width:80px"></label>
+  <label class="row">Per-file timeout <input type="number" id="timeout" min="0" step="500" style="width:90px"> <small>ms, 0 = none</small></label>
+  <label class="row">Threads <input type="number" id="threads" min="0" max="64" style="width:80px"> <small>0 = auto</small></label>
 
   <p style="margin-top:22px"><button class="btn ghost" id="save">Save as default</button><span class="saved" id="savedMsg" role="status"></span></p>
 </aside>
@@ -186,7 +189,10 @@ function applyConfig(c) {
   $('#generic').checked = c.generic;
   $('#regex').value = c.regex || '';
   $('#pw').value = (c.passwords || []).join('\n');
+  $('#wordlist').value = c.wordlist || '';
   $('#depth').value = c.max_depth;
+  $('#timeout').value = c.file_timeout_ms || 0;
+  $('#threads').value = c.threads || 0;
   $('#mods').innerHTML = MODS.map(([k, l]) =>
     `<label class="row"><input type="checkbox" data-mod="${k}" ${c.modules[k] ? 'checked' : ''}> ${l}</label>`).join('');
   baseConfig = c;
@@ -204,7 +210,10 @@ function readConfig() {
     generic: $('#generic').checked,
     regex: $('#regex').value.trim(),
     passwords: $('#pw').value.split('\n').map(s => s.trimEnd()).filter(Boolean),
+    wordlist: $('#wordlist').value.trim(),
     max_depth: Math.max(1, parseInt($('#depth').value) || 10),
+    file_timeout_ms: Math.max(0, parseInt($('#timeout').value) || 0),
+    threads: Math.max(0, parseInt($('#threads').value) || 0),
   };
 }
 
@@ -302,7 +311,9 @@ function render(s) {
     setStatus(`<span class="err">${esc(st.error || 'Scan failed')}</span>`);
   } else {
     const n = s.findings.length;
-    setStatus(`${st.state === 'cancelled' ? 'Stopped' : 'Finished'} in ${secs}s: ${n} flag${n === 1 ? '' : 's'} in ${st.files_total} file${st.files_total === 1 ? '' : 's'}, ${st.nodes} layers checked${st.budget_hit ? ' (layer limit reached)' : ''}.`);
+    setStatus(`<span>${st.state === 'cancelled' ? 'Stopped' : 'Finished'} in ${secs}s: ${n} flag${n === 1 ? '' : 's'} in ${st.files_total} file${st.files_total === 1 ? '' : 's'}, ${st.nodes} layers checked${st.budget_hit ? ' (layer limit reached)' : ''}.</span>
+      <a class="btn ghost" href="/api/jobs/${job}/report" download>Report .md</a>
+      <a class="btn ghost" href="/api/jobs/${job}/report?json=1" download>.json</a>`);
   }
 
   if (s.findings.length) {

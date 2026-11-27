@@ -181,5 +181,62 @@ with zipfile.ZipFile(zb, "w", zipfile.ZIP_DEFLATED) as z:
 k = b"\x13\x37\x42"
 w("33_xorzip.bin", bytes(b ^ k[i % 3] for i, b in enumerate(zb.getvalue())), F("xor3_zip"))
 
+# --- newer decoders ---
+B45A = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
+def b45enc(b):
+    out = ""
+    for i in range(0, len(b) - 1, 2):
+        n = b[i] * 256 + b[i + 1]; out += B45A[n % 45] + B45A[(n // 45) % 45] + B45A[n // 2025]
+    if len(b) % 2:
+        n = b[-1]; out += B45A[n % 45] + B45A[n // 45]
+    return out
+w("34_b45.txt", b45enc(F("base45_ok").encode()).encode(), F("base45_ok"))
+
+def b91enc(data):
+    A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~"'
+    b = n = 0; out = ""
+    for ch in data:
+        b |= ch << n; n += 8
+        if n > 13:
+            v = b & 8191
+            if v > 88: b >>= 13; n -= 13
+            else: v = b & 16383; b >>= 14; n -= 14
+            out += A[v % 91] + A[v // 91]
+    if n:
+        out += A[b % 91]
+        if n > 7 or b > 90: out += A[b // 91]
+    return out
+w("35_b91.txt", b91enc(F("base91_ok").encode()).encode(), F("base91_ok"))
+
+import codecs
+w("36_uu.txt", codecs.encode(F("uuencoded").encode() + b"\n", "uu"), F("uuencoded"))
+
+def bf_print(s):
+    out = ""; prev = 0
+    for ch in s:
+        c = ord(ch); d = c - prev; prev = c
+        out += ("+" * d if d >= 0 else "-" * -d) + "."
+    return out
+w("38_brainfuck.txt", bf_print(F("brainfuck_ok")).encode(), F("brainfuck_ok"))
+
+def vigenere(pt, key):
+    out = ""; ki = 0
+    for ch in pt:
+        if ch.isalpha():
+            base = 65 if ch.isupper() else 97
+            out += chr((ord(ch) - base + (ord(key[ki % len(key)]) - 97)) % 26 + base); ki += 1
+        else: out += ch
+    return out
+# Key length must be <= (prefix letters - 1) to be recoverable from "flag" alone, so 3 here.
+w("39_vigenere.txt", ("noise " + vigenere(F("vigenere_ok"), "key") + " noise").encode(), F("vigenere_ok"))
+
+# Encrypted zip whose password is only in the test wordlist.
+open("/tmp/_wlflag.txt", "w").write(F("wordlist_crack"))
+wlzip = os.path.join(OUT, "40_wordlist.zip")
+if os.path.exists(wlzip): os.remove(wlzip)
+subprocess.run(["zip", "-j", "-q", "-P", "s3cr3t_ctf_pw", wlzip, "/tmp/_wlflag.txt"], check=True)
+expected.append(F("wordlist_crack"))
+open(os.path.join(os.path.dirname(OUT.rstrip("/")), "wordlist.txt"), "w").write("wrong\nnope\ns3cr3t_ctf_pw\nmore\n")
+
 open(os.path.join(os.path.dirname(OUT.rstrip("/")), "expected.txt"), "w").write("\n".join(expected) + "\n")
 print(len(expected), "flags hidden")

@@ -61,6 +61,10 @@ impl Collector<'_> {
     fn try_window(&mut self, at: usize, transform: impl FnOnce() -> String, decode: impl Fn(usize, u8) -> u8) {
         let end = (at + WINDOW).min(self.data.len());
         let window: Vec<u8> = self.data[at..end].iter().enumerate().map(|(j, &b)| decode(j, b)).collect();
+        self.try_window_decoded(at, transform, window);
+    }
+
+    fn try_window_decoded(&mut self, at: usize, transform: impl FnOnce() -> String, window: Vec<u8>) {
         let Some(flag) = self.m.match_at_start(&window) else { return };
         if !plausible(&flag) {
             return;
@@ -151,6 +155,7 @@ pub fn scan(data: &[u8], m: &FlagMatcher, xor: bool, rot: bool) -> Vec<Hit> {
                     c.try_window(i, || name.to_string(), |_, b| f(b));
                 }
             }
+            vigenere(&mut c, p, l, n);
         }
     }
 
@@ -192,6 +197,55 @@ fn plausible(flag: &str) -> bool {
     let body = &flag[open + 1..flag.len().saturating_sub(1)];
     let good = body.chars().filter(|c| c.is_ascii_alphanumeric() || "_-!?.@$#+ ".contains(*c)).count();
     body.len() >= 4 && good * 100 >= body.len() * 85
+}
+
+/// Vigenere decrypt with the key recovered from the flag prefix (known plaintext). Standard
+/// convention: only letters are enciphered, the key advances only on letters, and case is kept.
+fn vigenere(c: &mut Collector, p: &[u8], l: usize, n: usize) {
+    // Letter positions within the prefix, and their plaintext letter values.
+    let pl: Vec<(usize, u8)> = p.iter().enumerate().filter_map(|(j, &b)| letter_idx(b).map(|v| (j, v))).collect();
+    if pl.len() < 3 || n < l {
+        return;
+    }
+    let maxk = (pl.len() - 1).min(6);
+    for i in 0..=n - l {
+        // Non-letter prefix bytes must match verbatim; letter case must match.
+        if !(0..l).all(|j| match letter_idx(p[j]) {
+            Some(_) => letter_idx(c.data[i + j]).is_some() && c.data[i + j].is_ascii_uppercase() == p[j].is_ascii_uppercase(),
+            None => c.data[i + j] == p[j],
+        }) {
+            continue;
+        }
+        let shifts: Vec<u8> = pl.iter().map(|&(j, pv)| (letter_idx(c.data[i + j]).unwrap() + 26 - pv) % 26).collect();
+        for klen in 2..=maxk {
+            if shifts.len() <= klen {
+                continue;
+            }
+            if !(klen..shifts.len()).all(|t| shifts[t] == shifts[t % klen]) {
+                continue;
+            }
+            let key = &shifts[..klen];
+            // All-equal keys are just Caesar (already covered); all-zero is identity.
+            if key.iter().all(|&k| k == key[0]) {
+                continue;
+            }
+            // Decode the window: the key advances once per letter, starting at key[0]
+            // on the prefix's first letter (which is window byte 0).
+            let end = (i + WINDOW).min(n);
+            let mut li = 0usize;
+            let window: Vec<u8> = c.data[i..end].iter().map(|&b| match letter_idx(b) {
+                Some(v) => {
+                    let k = key[li % klen];
+                    li += 1;
+                    let base = if b.is_ascii_uppercase() { b'A' } else { b'a' };
+                    base + (v + 26 - k) % 26
+                }
+                None => b,
+            }).collect();
+            let keyword: String = key.iter().map(|&k| (b'a' + k) as char).collect();
+            c.try_window_decoded(i, || format!("vigenere key '{keyword}'"), window);
+        }
+    }
 }
 
 fn hex(b: &[u8]) -> String {

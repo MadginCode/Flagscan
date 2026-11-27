@@ -1,7 +1,7 @@
 //! Local web UI + JSON API.
 
 use crate::config::{FlagMatcher, ScanConfig};
-use crate::engine::{Job, ScanResult, Scanner};
+use crate::engine::{Job, ScanResult};
 use crate::update::{self, UpdateInfo};
 use axum::{
     Json, Router,
@@ -81,6 +81,7 @@ pub async fn serve(opts: ServeOpts) -> anyhow::Result<()> {
         .route("/api/jobs/{id}", get(job_status))
         .route("/api/jobs/{id}/cancel", post(job_cancel))
         .route("/api/jobs/{id}/artifacts/{aid}", get(artifact))
+        .route("/api/jobs/{id}/report", get(report))
         .route("/api/update", get(update_status).post(update_apply))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state);
@@ -154,7 +155,7 @@ struct ScanReq {
 fn new_job(st: &AppState, cfg: ScanConfig, paths: Vec<PathBuf>, uploads: Option<tempfile::TempDir>) -> Result<String, Response> {
     let matcher = FlagMatcher::new(&cfg).map_err(|e| err(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
     let artifacts = tempfile::Builder::new().prefix("flagscan-art-").tempdir().map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let job = Job::new(Some(artifacts.path().to_path_buf()));
+    let job = Job::with_passwords(Some(artifacts.path().to_path_buf()), cfg.all_passwords());
     let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
     let root = uploads.as_ref().map(|u| u.path().to_path_buf());
     {
@@ -169,7 +170,7 @@ fn new_job(st: &AppState, cfg: ScanConfig, paths: Vec<PathBuf>, uploads: Option<
     }
     tokio::task::spawn_blocking(move || {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Scanner::new(&cfg, &matcher, &job).scan_paths(&paths, root.as_deref());
+            crate::engine::run(&cfg, &matcher, &job, &paths, root.as_deref());
         }));
         if r.is_err() {
             let mut res = job.result.lock().unwrap();
@@ -303,6 +304,24 @@ async fn artifact(State(st): S, AxPath((id, aid)): AxPath<(String, usize)>) -> R
         }
         Err(e) => err(StatusCode::NOT_FOUND, e),
     }
+}
+
+async fn report(State(st): S, AxPath(id): AxPath<String>, req: Request) -> Response {
+    let job = st.jobs.lock().unwrap().get(&id).map(|j| j.job.clone());
+    let Some(job) = job else { return err(StatusCode::NOT_FOUND, "unknown job") };
+    let res = job.snapshot();
+    let json = req.uri().query().is_some_and(|q| q.contains("json"));
+    let (body, ctype, fname) = if json {
+        (serde_json::to_string_pretty(&res).unwrap_or_default(), "application/json", "flagscan-report.json")
+    } else {
+        (crate::engine::report::markdown_result(&res), "text/markdown; charset=utf-8", "flagscan-report.md")
+    };
+    let mut h = HeaderMap::new();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(ctype));
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{fname}\"")) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    (h, body).into_response()
 }
 
 async fn update_status(State(st): S, req: Request) -> Response {

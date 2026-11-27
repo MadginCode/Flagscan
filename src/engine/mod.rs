@@ -11,6 +11,7 @@ pub mod containers;
 pub mod encodings;
 pub mod formats;
 pub mod stego;
+pub mod report;
 pub mod util;
 
 use crate::config::{FlagMatcher, ScanConfig};
@@ -18,9 +19,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Flags carried down a chain to stop pointless re-application of the same transform.
 #[derive(Clone, Copy, Default, Debug)]
@@ -101,11 +102,23 @@ pub struct Stats {
     pub budget_hit: bool,
 }
 
+/// Per-input-file triage: what the file is and whether it looks encrypted/compressed.
+#[derive(Clone, Debug, Serialize)]
+pub struct Triage {
+    pub name: String,
+    pub size: u64,
+    pub kind: String,
+    pub sha256: String,
+    /// Shannon entropy in bits per byte (8.0 = indistinguishable from random).
+    pub entropy: f64,
+}
+
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct ScanResult {
     pub findings: Vec<Finding>,
     pub notes: Vec<Note>,
     pub artifacts: Vec<ArtifactInfo>,
+    pub triage: Vec<Triage>,
     pub stats: Stats,
 }
 
@@ -123,19 +136,40 @@ impl ScanResult {
     }
 }
 
-/// Shared handle used by both CLI and web jobs.
+/// Shared handle used by both CLI and web jobs. Hot counters live in atomics so parallel
+/// workers don't contend on the result mutex for every node.
 pub struct Job {
     pub result: Mutex<ScanResult>,
     pub cancel: AtomicBool,
     pub artifact_dir: Option<PathBuf>,
+    pub started: Instant,
+    pub nodes: AtomicUsize,
+    pub bytes: AtomicU64,
+    pub files_done: AtomicUsize,
+    /// Precomputed once (includes any wordlist) and shared by every worker.
+    pub passwords: Vec<Vec<u8>>,
 }
 
 impl Job {
-    pub fn new(artifact_dir: Option<PathBuf>) -> Arc<Self> {
-        Arc::new(Self { result: Mutex::new(ScanResult::default()), cancel: AtomicBool::new(false), artifact_dir })
+    pub fn with_passwords(artifact_dir: Option<PathBuf>, passwords: Vec<Vec<u8>>) -> Arc<Self> {
+        Arc::new(Self {
+            result: Mutex::new(ScanResult::default()),
+            cancel: AtomicBool::new(false),
+            artifact_dir,
+            started: Instant::now(),
+            nodes: AtomicUsize::new(0),
+            bytes: AtomicU64::new(0),
+            files_done: AtomicUsize::new(0),
+            passwords,
+        })
     }
     pub fn snapshot(&self) -> ScanResult {
-        self.result.lock().unwrap().clone()
+        let mut r = self.result.lock().unwrap().clone();
+        r.stats.nodes = self.nodes.load(Ordering::Relaxed);
+        r.stats.bytes = self.bytes.load(Ordering::Relaxed);
+        r.stats.files_done = self.files_done.load(Ordering::Relaxed);
+        r.stats.elapsed_ms = self.started.elapsed().as_millis();
+        r
     }
 }
 
@@ -144,82 +178,117 @@ pub struct Scanner<'a> {
     pub matcher: &'a FlagMatcher,
     job: &'a Job,
     seen: HashSet<[u8; 16]>,
-    nodes: usize,
-    started: Instant,
-    pub passwords: Vec<Vec<u8>>,
+    pub passwords: &'a [Vec<u8>],
+    /// When the current file must be abandoned (per-file timeout).
+    deadline: Option<Instant>,
 }
 
 const MAX_ARTIFACTS: usize = 2000;
 const MAX_CHILDREN_PER_NODE: usize = 512;
 
-impl<'a> Scanner<'a> {
-    pub fn new(cfg: &'a ScanConfig, matcher: &'a FlagMatcher, job: &'a Job) -> Self {
-        Self { cfg, matcher, job, seen: HashSet::new(), nodes: 0, started: Instant::now(), passwords: cfg.all_passwords() }
+/// Collect files, set up the shared job, and scan them (in parallel across files). Used by both
+/// the CLI and the web server. `display_root` strips a prefix from reported names.
+pub fn run(cfg: &ScanConfig, matcher: &FlagMatcher, job: &Job, paths: &[PathBuf], display_root: Option<&Path>) {
+    let mut files = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            for e in walkdir::WalkDir::new(p).follow_links(false).into_iter().flatten() {
+                if e.file_type().is_file() {
+                    files.push(e.into_path());
+                }
+            }
+        } else {
+            files.push(p.clone());
+        }
+    }
+    files.sort();
+    let auto_root = match (display_root, paths) {
+        (None, [one]) => one.parent().map(Path::to_path_buf),
+        _ => None,
+    };
+    let display_root = display_root.or(auto_root.as_deref());
+    {
+        let mut r = job.result.lock().unwrap();
+        r.stats.state = "running".into();
+        r.stats.files_total = files.len();
     }
 
-    fn cancelled(&self) -> bool {
-        self.job.cancel.load(Ordering::Relaxed)
-    }
+    let next = AtomicUsize::new(0);
+    let workers = if cfg.threads == 0 { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) } else { cfg.threads }
+        .clamp(1, 64)
+        .min(files.len().max(1));
+    let timeout = (cfg.file_timeout_ms > 0).then(|| Duration::from_millis(cfg.file_timeout_ms));
 
-    /// Scan a list of paths (files or folders). `display_root` strips a prefix from names.
-    pub fn scan_paths(&mut self, paths: &[PathBuf], display_root: Option<&Path>) {
-        let mut files = Vec::new();
-        for p in paths {
-            if p.is_dir() {
-                for e in walkdir::WalkDir::new(p).follow_links(false).into_iter().flatten() {
-                    if e.file_type().is_file() {
-                        files.push(e.into_path());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let (next, files, display_root) = (&next, &files, display_root);
+            scope.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(f) = files.get(i) else { break };
+                    if job.cancel.load(Ordering::Relaxed) || job.nodes.load(Ordering::Relaxed) >= cfg.max_nodes {
+                        continue;
                     }
+                    let name = display_root.and_then(|r| f.strip_prefix(r).ok()).unwrap_or(f).to_string_lossy().into_owned();
+                    {
+                        job.result.lock().unwrap().stats.current = name.clone();
+                    }
+                    let mut sc = Scanner {
+                        cfg,
+                        matcher,
+                        job,
+                        seen: HashSet::new(),
+                        passwords: &job.passwords,
+                        deadline: timeout.map(|d| Instant::now() + d),
+                    };
+                    match std::fs::metadata(f) {
+                        Ok(m) if m.len() > cfg.max_file_size => {
+                            sc.note(vec![name.clone()], format!("skipped: {} bytes exceeds max file size", m.len()));
+                        }
+                        Ok(_) => match std::fs::read(f) {
+                            Ok(data) => {
+                                sc.triage(&name, &data);
+                                sc.scan_root(name.clone(), data);
+                            }
+                            Err(e) => sc.note(vec![name.clone()], format!("cannot read: {e}")),
+                        },
+                        Err(e) => sc.note(vec![name.clone()], format!("cannot stat: {e}")),
+                    }
+                    job.files_done.fetch_add(1, Ordering::Relaxed);
                 }
-            } else {
-                files.push(p.clone());
-            }
+            });
         }
-        files.sort();
-        // Show names relative to what was scanned: "files/a.png" rather than a full path.
-        let auto_root = match (display_root, paths) {
-            (None, [one]) => one.parent().map(Path::to_path_buf),
-            _ => None,
-        };
-        let display_root = display_root.or(auto_root.as_deref());
-        {
-            let mut r = self.job.result.lock().unwrap();
-            r.stats.state = "running".into();
-            r.stats.files_total = files.len();
-        }
-        for f in &files {
-            if self.cancelled() {
-                break;
-            }
-            let name = display_root
-                .and_then(|r| f.strip_prefix(r).ok())
-                .unwrap_or(f)
-                .to_string_lossy()
-                .into_owned();
-            self.update(|r| r.stats.current = name.clone());
-            match std::fs::metadata(f) {
-                Ok(m) if m.len() > self.cfg.max_file_size => {
-                    self.note(vec![name.clone()], format!("skipped: {} bytes exceeds max file size", m.len()));
-                }
-                Ok(_) => match std::fs::read(f) {
-                    Ok(data) => self.scan_root(name, data),
-                    Err(e) => self.note(vec![name.clone()], format!("cannot read: {e}")),
-                },
-                Err(e) => self.note(vec![name.clone()], format!("cannot stat: {e}")),
-            }
-            self.update(|r| r.stats.files_done += 1);
-        }
-        let cancelled = self.cancelled();
-        let elapsed = self.started.elapsed().as_millis();
-        self.update(|r| {
-            r.stats.state = if cancelled { "cancelled".into() } else { "done".into() };
-            r.stats.current.clear();
-            r.stats.elapsed_ms = elapsed;
-        });
-    }
+    });
+
+    let cancelled = job.cancel.load(Ordering::Relaxed);
+    let mut r = job.result.lock().unwrap();
+    r.stats.state = if cancelled { "cancelled".into() } else { "done".into() };
+    r.stats.current.clear();
+    r.stats.elapsed_ms = job.started.elapsed().as_millis();
+    r.stats.nodes = job.nodes.load(Ordering::Relaxed);
+    r.stats.bytes = job.bytes.load(Ordering::Relaxed);
+    r.stats.files_done = job.files_done.load(Ordering::Relaxed);
+}
+
+impl<'a> Scanner<'a> {
 
     fn update(&self, f: impl FnOnce(&mut ScanResult)) {
         f(&mut self.job.result.lock().unwrap());
+    }
+
+    /// Record a top-level file's type, hash and entropy, and flag likely crypto.
+    fn triage(&self, name: &str, data: &[u8]) {
+        let kind = util::sniff(data).unwrap_or(if util::printable_ratio(data) > 0.9 { "text" } else { "data" });
+        let entropy = shannon_entropy(data);
+        let sha256 = {
+            let h = Sha256::digest(data);
+            h.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        };
+        // A high-entropy blob that isn't a known compressed/image format is probably encrypted.
+        if entropy > 7.8 && matches!(kind, "data") && data.len() >= 256 {
+            self.note(vec![name.into()], format!("high entropy ({entropy:.2} bits/byte) with no known header: likely encrypted or raw-compressed"));
+        }
+        self.update(|r| r.triage.push(Triage { name: name.into(), size: data.len() as u64, kind: kind.into(), sha256, entropy }));
     }
 
     pub fn note(&self, chain: Vec<String>, message: String) {
@@ -259,25 +328,21 @@ impl<'a> Scanner<'a> {
     pub fn scan_root(&mut self, name: String, data: Vec<u8>) {
         let mut queue = VecDeque::new();
         self.seen.insert(Self::digest(&data));
-        queue.push_back(Node { data, chain: vec![name], depth: 0, origin: Origin::default() });
+        queue.push_back(Node { data, chain: vec![name.clone()], depth: 0, origin: Origin::default() });
         while let Some(node) = queue.pop_front() {
-            if self.cancelled() {
+            if self.job.cancel.load(Ordering::Relaxed) {
                 return;
             }
-            if self.nodes >= self.cfg.max_nodes {
+            if self.deadline.is_some_and(|d| Instant::now() >= d) {
+                self.note(vec![name], format!("timed out after {} ms; this file was only partly scanned", self.cfg.file_timeout_ms));
+                return;
+            }
+            if self.job.nodes.fetch_add(1, Ordering::Relaxed) >= self.cfg.max_nodes {
                 self.update(|r| r.stats.budget_hit = true);
                 self.note(node.chain.clone(), "node budget reached; deeper layers were skipped".into());
                 return;
             }
-            self.nodes += 1;
-            let elapsed = self.started.elapsed().as_millis();
-            let n = self.nodes;
-            let len = node.data.len() as u64;
-            self.update(|r| {
-                r.stats.nodes = n;
-                r.stats.bytes += len;
-                r.stats.elapsed_ms = elapsed;
-            });
+            self.job.bytes.fetch_add(node.data.len() as u64, Ordering::Relaxed);
             let children = self.process(&node);
             if node.depth + 1 > self.cfg.max_depth {
                 continue;
@@ -372,10 +437,27 @@ impl<'a> Scanner<'a> {
     }
 }
 
+/// Shannon entropy over the first 256 KiB, in bits per byte.
+fn shannon_entropy(data: &[u8]) -> f64 {
+    let data = &data[..data.len().min(256 * 1024)];
+    if data.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0u64; 256];
+    for &b in data {
+        counts[b as usize] += 1;
+    }
+    let n = data.len() as f64;
+    -counts.iter().filter(|&&c| c > 0).map(|&c| {
+        let p = c as f64 / n;
+        p * p.log2()
+    }).sum::<f64>()
+}
+
 /// Convenience used by the CLI and tests: scan paths synchronously and return the result.
 pub fn scan_blocking(cfg: &ScanConfig, paths: &[PathBuf], artifact_dir: Option<PathBuf>) -> anyhow::Result<ScanResult> {
     let matcher = FlagMatcher::new(cfg)?;
-    let job = Job::new(artifact_dir);
-    Scanner::new(cfg, &matcher, &job).scan_paths(paths, None);
+    let job = Job::with_passwords(artifact_dir, cfg.all_passwords());
+    run(cfg, &matcher, &job, paths, None);
     Ok(job.snapshot())
 }

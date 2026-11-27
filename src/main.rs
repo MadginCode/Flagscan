@@ -53,13 +53,25 @@ enum Cmd {
         /// Extra archive password to try, repeatable
         #[arg(short, long = "password")]
         passwords: Vec<String>,
+        /// Wordlist file for cracking encrypted archives (e.g. rockyou.txt)
+        #[arg(long)]
+        wordlist: Option<PathBuf>,
+        /// Abandon a single file after this many milliseconds (0 = no limit)
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Worker threads for folder scans (0 = number of CPUs)
+        #[arg(long)]
+        threads: Option<usize>,
         /// Save extracted artifacts (archive members, carved files, repaired images) here
         #[arg(long)]
         extract: Option<PathBuf>,
+        /// Write a report of all findings to this file (.md or .json by extension)
+        #[arg(long)]
+        report: Option<PathBuf>,
         /// Print notes (hints) as well as flags
         #[arg(short, long)]
         verbose: bool,
-        /// JSON output
+        /// JSON output to stdout
         #[arg(long)]
         json: bool,
     },
@@ -76,7 +88,7 @@ fn main() -> anyhow::Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(server::serve(server::ServeOpts { bind, port, open: !no_open, update_check: !no_update_check }))
         }
-        Cmd::Scan { paths, formats, regex, generic, case_sensitive, depth, passwords, extract, verbose, json } => {
+        Cmd::Scan { paths, formats, regex, generic, case_sensitive, depth, passwords, wordlist, timeout, threads, extract, report, verbose, json } => {
             let mut cfg = ScanConfig::load();
             if !formats.is_empty() {
                 cfg.formats = formats;
@@ -92,10 +104,25 @@ fn main() -> anyhow::Result<()> {
                 cfg.max_depth = d;
             }
             cfg.passwords.extend(passwords);
+            if let Some(w) = wordlist {
+                cfg.wordlist = w.to_string_lossy().into_owned();
+            }
+            if let Some(t) = timeout {
+                cfg.file_timeout_ms = t;
+            }
+            if let Some(t) = threads {
+                cfg.threads = t;
+            }
             if let Some(dir) = &extract {
                 std::fs::create_dir_all(dir)?;
             }
             let res = engine::scan_blocking(&cfg, &paths, extract)?;
+            if let Some(path) = &report {
+                let is_json = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
+                let body = if is_json { serde_json::to_string_pretty(&res)? } else { engine::report::markdown(&cfg, &paths, &res) };
+                std::fs::write(path, body)?;
+                eprintln!("report written to {}", path.display());
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&res)?);
                 return Ok(());

@@ -21,17 +21,23 @@ Every derived blob is scanned again, so these chain in any order up to the depth
 
 | Module | Covers |
 | --- | --- |
-| Encodings | base64, base64url, base32, base58, ascii85, hex (plain, `de:ad`, `\x41`, `0x41`), binary, decimal, octal, URL, HTML entities, Morse, UTF-16 LE/BE strings |
-| Archives | zip (with password guessing), tar, 7z (with password guessing), gzip, zlib, bzip2, xz, lzma, zstd |
+| Encodings | base64, base64url, base32, base45, base58, base62, base91, ascii85, hex (plain, `de:ad`, `\x41`, `0x41`), binary, decimal, octal, URL, HTML entities, quoted-printable, uuencode, Morse, Bacon, Brainfuck, Ook, UTF-16 LE/BE strings |
+| Archives | zip (with password guessing + wordlist), tar, 7z (with password guessing + wordlist), gzip, zlib, bzip2, xz, lzma, zstd |
 | Metadata | EXIF; PNG text chunks, unknown chunks, data after IEND, IHDR CRC mismatch (brute-forces the real width/height and gives you the repaired image), pixel data taller than the header; JPEG comments and data after EOI; PDF streams; pcap/pcapng TCP/UDP/ICMP flows, DNS query names (and joined first labels for exfil), USB keyboard keystrokes; repaired PNG/JPEG signatures |
 | Embedded files | binwalk-style carving by magic bytes |
 | LSB stego | zsteg-style bit planes for PNG/BMP/GIF/TIFF/WebP (R, G, B, A, RGB, BGR, RGBA; 1 and 2 bits; both bit orders; row and column order) and WAV samples |
-| XOR | single-byte and short repeating keys, found by known plaintext on your flag prefix (fast on big files); whole files XORed to hide a PNG/zip/PDF header |
-| ROT / reverse | Caesar (any shift), ROT13, ROT47, Atbash, reversed data |
+| Ciphers | single-byte and short repeating-key XOR, Caesar (any shift), ROT13, ROT47, Atbash, and Vigenere, all recovered by known plaintext on your flag prefix (fast on big files); whole files XORed to hide a PNG/zip/PDF header; reversed data |
 
 Flag formats: enter prefixes like `flag{}`, `CTF{`, `picoCTF`. Prefix case is ignored by default. Add a custom regex for odd formats, or turn on "Also report any word{…}" when you don't know the format (noisier).
 
-The Hints tab lists what looked suspicious even when no flag matched: an encrypted entry the password list did not open, a resized PNG, readable text in an LSB plane. That is usually the next step.
+The Hints tab lists what looked suspicious even when no flag matched: an encrypted entry the password list did not open, a resized PNG, readable text in an LSB plane, or a high-entropy file that is probably encrypted. That is usually the next step.
+
+### Cracking, limits, and reports
+
+- **Wordlist**: point the wordlist field (or `--wordlist rockyou.txt`) at a password list to crack encrypted zip and 7z archives. Your explicit passwords and a short built-in list are tried first, then the wordlist (capped at 1,000,000 entries).
+- **Parallel scanning**: folders are scanned across worker threads (one per CPU by default; set with `--threads` or the Threads field).
+- **Per-file timeout**: `--timeout <ms>` (or the Per-file timeout field) abandons any single file that takes too long and moves on, so one pathological file can't stall a folder scan.
+- **Reports**: download a Markdown or JSON report from the web UI after a scan, or write one from the CLI with `--report out.md` / `--report out.json`. Every input file also gets a triage line (type, size, SHA-256, entropy).
 
 ## Auto-update
 

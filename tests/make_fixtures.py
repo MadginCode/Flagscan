@@ -264,5 +264,67 @@ try:
 except ImportError:
     print("qrcode module not installed; skipping QR fixtures")
 
+# --- PDF with LZW and ASCIIHex filters ---
+def pdf_lzw_encode(data):
+    table = {bytes([i]): i for i in range(256)}; nxt = 258; width = 9; buf = 0; nb = 0; res = bytearray()
+    def emit(code):
+        nonlocal buf, nb, width, res
+        buf = (buf << width) | code; nb += width
+        while nb >= 8:
+            nb -= 8; res.append((buf >> nb) & 0xFF)
+    emit(256); w = b""
+    for c in data:
+        wc = w + bytes([c])
+        if wc in table: w = wc
+        else:
+            emit(table[w]); table[wc] = nxt; nxt += 1
+            if nxt - 1 >= (1 << width) - 1 and width < 12: width += 1
+            w = bytes([c])
+    if w: emit(table[w])
+    emit(257)
+    if nb > 0: res.append((buf << (8 - nb)) & 0xFF)
+    return bytes(res)
+lzw = pdf_lzw_encode(("BT (%s) Tj ET" % F("pdf_lzw")).encode())
+pdf = b"%PDF-1.4\n1 0 obj<</Length " + str(len(lzw)).encode() + b"/Filter/LZWDecode>>stream\n" + lzw + b"\nendstream\nendobj\n"
+hx = ("BT (%s) Tj ET" % F("pdf_hex")).encode().hex().encode() + b">"
+pdf += b"2 0 obj<</Length " + str(len(hx)).encode() + b"/Filter/ASCIIHexDecode>>stream\n" + hx + b"\nendstream\nendobj\n%%EOF\n"
+w("46_pdf_filters.pdf", pdf, F("pdf_lzw"))
+expected.append(F("pdf_hex"))
+
+# --- Office OLE file with a VBA macro (raw MS-OVBA container) ---
+def ole_with_macro(flag):
+    FREESECT = 0xFFFFFFFF; ENDOFCHAIN = 0xFFFFFFFE; S = 512
+    def comp_raw(d):
+        out = bytearray(b"\x01"); off = 0
+        while off < len(d):
+            block = d[off:off + 4096]; off += 4096
+            sf = 0x0FFF if len(block) == 4096 else (len(block) - 1) & 0x0FFF
+            out += struct.pack("<H", 0x3000 | sf) + bytes(block)
+        return bytes(out)
+    src = b"Attribute VB_Name = \"Module1\"\r\n" + b"' pad line to exceed the mini-stream cutoff\r\n" * 120 + b"Sub A()\r\n  x = \"" + flag.encode() + b"\"\r\nEnd Sub\r\n"
+    comp = comp_raw(src)
+    def dirent(name, typ, start, size, child=FREESECT):
+        nm = name.encode("utf-16-le") + b"\x00\x00"; nm = (nm[:64] + b"\x00" * 64)[:64]
+        e = bytearray(128); e[0:len(nm)] = nm
+        struct.pack_into("<H", e, 64, len(name.encode("utf-16-le")) + 2); e[66] = typ; e[67] = 1
+        struct.pack_into("<I", e, 68, FREESECT); struct.pack_into("<I", e, 72, FREESECT); struct.pack_into("<I", e, 76, child)
+        struct.pack_into("<I", e, 116, start); struct.pack_into("<I", e, 120, size); return bytes(e)
+    data = comp + b"\x00" * ((-len(comp)) % S); nsect = len(data) // S
+    fat = [FREESECT] * (S // 4)
+    for i in range(nsect - 1): fat[i] = i + 1
+    fat[nsect - 1] = ENDOFCHAIN; fat[nsect] = 0xFFFFFFFD; fat[nsect + 1] = ENDOFCHAIN
+    fatbytes = b"".join(struct.pack("<I", x) for x in fat)
+    dirb = dirent("Root Entry", 5, ENDOFCHAIN, 0, child=1) + dirent("Module1", 2, 0, len(comp))
+    dirb += b"\x00" * ((S - (len(dirb) % S)) % S)
+    h = bytearray(512); h[0:8] = bytes([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
+    struct.pack_into("<H", h, 24, 0x3E); struct.pack_into("<H", h, 26, 3); struct.pack_into("<H", h, 28, 0xFFFE)
+    struct.pack_into("<H", h, 30, 9); struct.pack_into("<H", h, 32, 6)
+    struct.pack_into("<I", h, 44, 1); struct.pack_into("<I", h, 48, nsect + 1); struct.pack_into("<I", h, 56, 4096)
+    struct.pack_into("<I", h, 60, ENDOFCHAIN); struct.pack_into("<I", h, 68, ENDOFCHAIN)
+    struct.pack_into("<I", h, 76, nsect)
+    for i in range(1, 109): struct.pack_into("<I", h, 76 + i * 4, FREESECT)
+    return bytes(h) + data + fatbytes + dirb
+w("47_macro.doc", ole_with_macro(F("vba_macro")), F("vba_macro"))
+
 open(os.path.join(os.path.dirname(OUT.rstrip("/")), "expected.txt"), "w").write("\n".join(expected) + "\n")
 print(len(expected), "flags hidden")

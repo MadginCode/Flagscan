@@ -12,6 +12,7 @@ pub mod encodings;
 pub mod formats;
 pub mod stego;
 pub mod http;
+pub mod ole;
 pub mod tools;
 pub mod qr;
 pub mod report;
@@ -401,6 +402,9 @@ impl<'a> Scanner<'a> {
         if !node.origin.text_only {
             if m.archives {
                 containers::expand(self, data, kind, &mut kids, &mut notes);
+                if kind == Some("ole") {
+                    ole::expand(data, &mut kids, &mut notes);
+                }
             }
             if m.metadata {
                 formats::expand(data, kind, &mut kids, &mut notes);

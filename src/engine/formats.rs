@@ -256,8 +256,13 @@ fn pdf(d: &[u8], kids: &mut Vec<Child>, notes: &mut Vec<String>) {
         let Some(e) = endf.find(&d[start..]) else { break };
         let body = &d[start..start + e];
         n += 1;
-        if let Some(out) = util::read_limited(flate2::read::ZlibDecoder::new(body), 256 << 20) {
-            let c = Child::new(format!("PDF stream #{n} inflated"), out);
+        // Read the stream's dictionary (the `<< … >>` just before `stream`) to pick filters.
+        let dict_start = d[..s].windows(2).rposition(|w| w == b"<<").map(|p| p + 2).unwrap_or(0);
+        let dict = &d[dict_start..s];
+        let filters = pdf_filters(dict);
+        if let Some(out) = apply_pdf_filters(body, &filters) {
+            let label = if filters.is_empty() { format!("PDF stream #{n}") } else { format!("PDF stream #{n} ({})", filters.join("+")) };
+            let c = Child::new(label, out);
             kids.push(if util::sniff(&c.data).is_some() { c.artifact() } else { c });
         }
         pos = start + e + 9;
@@ -270,6 +275,169 @@ fn pdf(d: &[u8], kids: &mut Vec<Child>, notes: &mut Vec<String>) {
             notes.push(msg.into());
         }
     }
+}
+
+/// Filter names from a PDF stream dictionary, in application order (abbreviations included).
+fn pdf_filters(dict: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(dict);
+    let Some(i) = text.find("/Filter") else { return vec![] };
+    let tail = &text[i + 7..];
+    let mut out = Vec::new();
+    for tok in tail.split(|c: char| !(c.is_ascii_alphanumeric() || c == '/')) {
+        if let Some(name) = tok.strip_prefix('/') {
+            let canon = match name {
+                "Fl" | "FlateDecode" => "FlateDecode",
+                "LZW" | "LZWDecode" => "LZWDecode",
+                "AHx" | "ASCIIHexDecode" => "ASCIIHexDecode",
+                "A85" | "ASCII85Decode" => "ASCII85Decode",
+                "RL" | "RunLengthDecode" => "RunLengthDecode",
+                _ => break, // stop at the first non-filter name (e.g. after the array)
+            };
+            out.push(canon.to_string());
+        } else if !tok.is_empty() && !out.is_empty() {
+            break; // a non-name token after we started: end of the filter list
+        }
+    }
+    out
+}
+
+fn apply_pdf_filters(body: &[u8], filters: &[String]) -> Option<Vec<u8>> {
+    if filters.is_empty() {
+        // No declared filter: most real streams are still Flate; try it, else keep raw.
+        return util::read_limited(flate2::read::ZlibDecoder::new(body), 256 << 20).or_else(|| Some(body.to_vec()));
+    }
+    let mut cur = body.to_vec();
+    for f in filters {
+        cur = match f.as_str() {
+            "FlateDecode" => util::read_limited(flate2::read::ZlibDecoder::new(&cur[..]), 256 << 20)?,
+            "LZWDecode" => pdf_lzw(&cur)?,
+            "ASCIIHexDecode" => ascii_hex(&cur)?,
+            "ASCII85Decode" => ascii85(&cur)?,
+            "RunLengthDecode" => run_length(&cur),
+            _ => return None,
+        };
+    }
+    Some(cur)
+}
+
+fn ascii_hex(d: &[u8]) -> Option<Vec<u8>> {
+    let digits: Vec<u8> = d.iter().take_while(|&&b| b != b'>').filter(|b| b.is_ascii_hexdigit()).copied().collect();
+    digits.chunks(2).map(|c| {
+        let hi = (c[0] as char).to_digit(16)?;
+        let lo = c.get(1).map(|&b| (b as char).to_digit(16)).unwrap_or(Some(0))?;
+        Some((hi * 16 + lo) as u8)
+    }).collect()
+}
+
+fn ascii85(d: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut group: Vec<u32> = Vec::with_capacity(5);
+    for &c in d.iter().skip_while(|&&b| b == b'<' || b == b'~') {
+        match c {
+            b'~' => break,
+            b'z' if group.is_empty() => out.extend_from_slice(&[0; 4]),
+            b'!'..=b'u' => {
+                group.push((c - 33) as u32);
+                if group.len() == 5 {
+                    let v = group.iter().try_fold(0u32, |a, &x| a.checked_mul(85)?.checked_add(x))?;
+                    out.extend_from_slice(&v.to_be_bytes());
+                    group.clear();
+                }
+            }
+            c if c.is_ascii_whitespace() => {}
+            _ => return None,
+        }
+    }
+    if !group.is_empty() {
+        let n = group.len();
+        while group.len() < 5 {
+            group.push(84);
+        }
+        let v = group.iter().try_fold(0u32, |a, &x| a.checked_mul(85)?.checked_add(x))?;
+        out.extend_from_slice(&v.to_be_bytes()[..n - 1]);
+    }
+    Some(out)
+}
+
+/// PDF/TIFF LZW (variable code width 9..12, EarlyChange = 1).
+fn pdf_lzw(d: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut table: Vec<Vec<u8>> = Vec::new();
+    let reset = |t: &mut Vec<Vec<u8>>| {
+        t.clear();
+        for i in 0..256 {
+            t.push(vec![i as u8]);
+        }
+        t.push(vec![]); // 256 = clear
+        t.push(vec![]); // 257 = eod
+    };
+    reset(&mut table);
+    let (mut bitbuf, mut bits, mut width) = (0u32, 0u32, 9u32);
+    let mut prev: Option<usize> = None;
+    for &byte in d {
+        bitbuf = (bitbuf << 8) | byte as u32;
+        bits += 8;
+        while bits >= width {
+            bits -= width;
+            let code = ((bitbuf >> bits) & ((1 << width) - 1)) as usize;
+            if code == 256 {
+                reset(&mut table);
+                width = 9;
+                prev = None;
+                continue;
+            }
+            if code == 257 {
+                return Some(out);
+            }
+            let entry = if code < table.len() {
+                table[code].clone()
+            } else if let Some(p) = prev {
+                let mut e = table[p].clone();
+                e.push(table[p][0]);
+                e
+            } else {
+                return None;
+            };
+            out.extend_from_slice(&entry);
+            if let Some(p) = prev {
+                let mut ne = table[p].clone();
+                ne.push(entry[0]);
+                table.push(ne);
+            }
+            prev = Some(code);
+            // EarlyChange: widen one code before the table fills.
+            if table.len() + 1 >= (1 << width) && width < 12 {
+                width += 1;
+            }
+            if out.len() > 256 << 20 {
+                return Some(out);
+            }
+        }
+    }
+    Some(out)
+}
+
+fn run_length(d: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < d.len() {
+        let len = d[i];
+        i += 1;
+        if len == 128 {
+            break;
+        }
+        if len < 128 {
+            let n = len as usize + 1;
+            let end = (i + n).min(d.len());
+            out.extend_from_slice(&d[i..end]);
+            i = end;
+        } else if i < d.len() {
+            let n = 257 - len as usize;
+            out.extend(std::iter::repeat_n(d[i], n));
+            i += 1;
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------- pcap

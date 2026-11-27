@@ -55,7 +55,19 @@ The check uses your operating system's certificate store, so it works behind TLS
 
 If you fork or rename the repo, change `REPO_OWNER` / `REPO_NAME` in `src/update.rs`.
 
-## Build from source
+### Code signing (optional)
+
+The release workflow signs the macOS and Windows binaries when the matching repository secrets are set, and otherwise ships them unsigned. To enable it, add `MACOS_CERT_P12` (base64 of your `.p12`), `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, and for Windows `WINDOWS_CERT_PFX` (base64 of your `.pfx`) and `WINDOWS_CERT_PASSWORD`. macOS notarization (stapling) is left out; add an `xcrun notarytool` step if you need it.
+
+## Watch mode
+
+For a live CTF, point flagscan at your downloads folder and it scans each new or changed file as it lands, printing any flag with its decode chain:
+
+```sh
+flagscan watch ~/Downloads/ctf -f 'picoCTF{}'
+```
+
+## Build from source and tests
 
 ```sh
 cargo build --release   # target/release/flagscan
@@ -63,13 +75,18 @@ cargo build --release   # target/release/flagscan
 
 Pure Rust apart from the TLS crypto, so it builds on Linux, macOS and Windows with a normal Rust toolchain.
 
-## Tests
-
-`tests/make_fixtures.py` generates layered challenges hiding 31 flags (needs `pillow py7zr zstandard` and the `zip` command). CI runs the scanner over them and fails if any flag is missed.
+`tests/make_fixtures.py` generates layered challenges hiding 45 flags (needs `pillow py7zr zstandard qrcode` and the `zip` command). CI runs the scanner over them and fails if any flag is missed.
 
 ```sh
 python3 tests/make_fixtures.py target/fixtures/files
 ./target/release/flagscan scan target/fixtures/files
+```
+
+The parsers are fuzzed with `cargo-fuzz` (the `fuzz/` crate):
+
+```sh
+cargo install cargo-fuzz
+cargo +nightly fuzz run scan
 ```
 
 ## Security notes

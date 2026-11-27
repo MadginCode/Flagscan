@@ -471,3 +471,13 @@ pub fn scan_blocking(cfg: &ScanConfig, paths: &[PathBuf], artifact_dir: Option<P
     run(cfg, &matcher, &job, paths, None);
     Ok(job.snapshot())
 }
+
+/// In-memory scan of a single blob with a tight budget. Used by the fuzz harness to exercise every
+/// parser on arbitrary input without touching the filesystem; also handy for embedding.
+pub fn scan_bytes(cfg: &ScanConfig, name: &str, data: Vec<u8>) -> ScanResult {
+    let Ok(matcher) = FlagMatcher::new(cfg) else { return ScanResult::default() };
+    let job = Job::with_passwords(None, cfg.all_passwords());
+    let mut sc = Scanner { cfg, matcher: &matcher, job: &job, seen: HashSet::new(), passwords: &job.passwords, deadline: None };
+    sc.scan_root(name.to_string(), data);
+    job.snapshot()
+}

@@ -181,5 +181,150 @@ with zipfile.ZipFile(zb, "w", zipfile.ZIP_DEFLATED) as z:
 k = b"\x13\x37\x42"
 w("33_xorzip.bin", bytes(b ^ k[i % 3] for i, b in enumerate(zb.getvalue())), F("xor3_zip"))
 
+# --- newer decoders ---
+B45A = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
+def b45enc(b):
+    out = ""
+    for i in range(0, len(b) - 1, 2):
+        n = b[i] * 256 + b[i + 1]; out += B45A[n % 45] + B45A[(n // 45) % 45] + B45A[n // 2025]
+    if len(b) % 2:
+        n = b[-1]; out += B45A[n % 45] + B45A[n // 45]
+    return out
+w("34_b45.txt", b45enc(F("base45_ok").encode()).encode(), F("base45_ok"))
+
+def b91enc(data):
+    A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~"'
+    b = n = 0; out = ""
+    for ch in data:
+        b |= ch << n; n += 8
+        if n > 13:
+            v = b & 8191
+            if v > 88: b >>= 13; n -= 13
+            else: v = b & 16383; b >>= 14; n -= 14
+            out += A[v % 91] + A[v // 91]
+    if n:
+        out += A[b % 91]
+        if n > 7 or b > 90: out += A[b // 91]
+    return out
+w("35_b91.txt", b91enc(F("base91_ok").encode()).encode(), F("base91_ok"))
+
+import codecs
+w("36_uu.txt", codecs.encode(F("uuencoded").encode() + b"\n", "uu"), F("uuencoded"))
+
+def bf_print(s):
+    out = ""; prev = 0
+    for ch in s:
+        c = ord(ch); d = c - prev; prev = c
+        out += ("+" * d if d >= 0 else "-" * -d) + "."
+    return out
+w("38_brainfuck.txt", bf_print(F("brainfuck_ok")).encode(), F("brainfuck_ok"))
+
+def vigenere(pt, key):
+    out = ""; ki = 0
+    for ch in pt:
+        if ch.isalpha():
+            base = 65 if ch.isupper() else 97
+            out += chr((ord(ch) - base + (ord(key[ki % len(key)]) - 97)) % 26 + base); ki += 1
+        else: out += ch
+    return out
+# Key length must be <= (prefix letters - 1) to be recoverable from "flag" alone, so 3 here.
+w("39_vigenere.txt", ("noise " + vigenere(F("vigenere_ok"), "key") + " noise").encode(), F("vigenere_ok"))
+
+# Encrypted zip whose password is only in the test wordlist.
+open("/tmp/_wlflag.txt", "w").write(F("wordlist_crack"))
+wlzip = os.path.join(OUT, "40_wordlist.zip")
+if os.path.exists(wlzip): os.remove(wlzip)
+subprocess.run(["zip", "-j", "-q", "-P", "s3cr3t_ctf_pw", wlzip, "/tmp/_wlflag.txt"], check=True)
+expected.append(F("wordlist_crack"))
+open(os.path.join(os.path.dirname(OUT.rstrip("/")), "wordlist.txt"), "w").write("wrong\nnope\ns3cr3t_ctf_pw\nmore\n")
+
+# --- HTTP file extraction (gzip + chunked response) ---
+def tcp_stream(sp, dp, payload):
+    return eth(ipv4(6, [10, 0, 0, 9], [10, 0, 0, 8], tcp(sp, dp, 3000, payload)))
+gzbody = gzip.compress(b"<p>download: " + F("http_gzip").encode() + b"</p>")
+httpresp = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n" + b"%x\r\n" % len(gzbody) + gzbody + b"\r\n0\r\n\r\n"
+w("44_http_gzip.pcap", pcap([tcp_stream(80, 7777, httpresp)]), F("http_gzip"))
+
+bnd = "----ctfboundary"
+mpbody = ("--%s\r\nContent-Disposition: form-data; name=\"f\"; filename=\"flag.txt\"\r\n\r\n%s\r\n--%s--\r\n" % (bnd, F("http_upload"), bnd)).encode()
+httpreq = b"POST /u HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=" + bnd.encode() + b"\r\nContent-Length: %d\r\n\r\n" % len(mpbody) + mpbody
+w("45_http_upload.pcap", pcap([tcp_stream(8888, 80, httpreq)]), F("http_upload"))
+
+# --- QR codes ---
+try:
+    import qrcode
+    qimg = io.BytesIO(); qrcode.make(F("qr_plain")).save(qimg, "PNG")
+    w("41_qr.png", qimg.getvalue(), F("qr_plain"))
+    # QR carrying base64, to exercise chaining
+    qb = io.BytesIO(); qrcode.make(base64.b64encode(F("qr_b64").encode()).decode()).save(qb, "PNG")
+    w("42_qr_b64.png", qb.getvalue(), F("qr_b64"))
+    # QR PNG hidden in the LSB of a cover image
+    qp = io.BytesIO(); qrcode.make(F("qr_lsb")).save(qp, "PNG")
+    w("43_qr_lsb.png", lsb_embed(qp.getvalue(), size=(360, 300)), F("qr_lsb"))
+except ImportError:
+    print("qrcode module not installed; skipping QR fixtures")
+
+# --- PDF with LZW and ASCIIHex filters ---
+def pdf_lzw_encode(data):
+    table = {bytes([i]): i for i in range(256)}; nxt = 258; width = 9; buf = 0; nb = 0; res = bytearray()
+    def emit(code):
+        nonlocal buf, nb, width, res
+        buf = (buf << width) | code; nb += width
+        while nb >= 8:
+            nb -= 8; res.append((buf >> nb) & 0xFF)
+    emit(256); w = b""
+    for c in data:
+        wc = w + bytes([c])
+        if wc in table: w = wc
+        else:
+            emit(table[w]); table[wc] = nxt; nxt += 1
+            if nxt - 1 >= (1 << width) - 1 and width < 12: width += 1
+            w = bytes([c])
+    if w: emit(table[w])
+    emit(257)
+    if nb > 0: res.append((buf << (8 - nb)) & 0xFF)
+    return bytes(res)
+lzw = pdf_lzw_encode(("BT (%s) Tj ET" % F("pdf_lzw")).encode())
+pdf = b"%PDF-1.4\n1 0 obj<</Length " + str(len(lzw)).encode() + b"/Filter/LZWDecode>>stream\n" + lzw + b"\nendstream\nendobj\n"
+hx = ("BT (%s) Tj ET" % F("pdf_hex")).encode().hex().encode() + b">"
+pdf += b"2 0 obj<</Length " + str(len(hx)).encode() + b"/Filter/ASCIIHexDecode>>stream\n" + hx + b"\nendstream\nendobj\n%%EOF\n"
+w("46_pdf_filters.pdf", pdf, F("pdf_lzw"))
+expected.append(F("pdf_hex"))
+
+# --- Office OLE file with a VBA macro (raw MS-OVBA container) ---
+def ole_with_macro(flag):
+    FREESECT = 0xFFFFFFFF; ENDOFCHAIN = 0xFFFFFFFE; S = 512
+    def comp_raw(d):
+        out = bytearray(b"\x01"); off = 0
+        while off < len(d):
+            block = d[off:off + 4096]; off += 4096
+            sf = 0x0FFF if len(block) == 4096 else (len(block) - 1) & 0x0FFF
+            out += struct.pack("<H", 0x3000 | sf) + bytes(block)
+        return bytes(out)
+    src = b"Attribute VB_Name = \"Module1\"\r\n" + b"' pad line to exceed the mini-stream cutoff\r\n" * 120 + b"Sub A()\r\n  x = \"" + flag.encode() + b"\"\r\nEnd Sub\r\n"
+    comp = comp_raw(src)
+    def dirent(name, typ, start, size, child=FREESECT):
+        nm = name.encode("utf-16-le") + b"\x00\x00"; nm = (nm[:64] + b"\x00" * 64)[:64]
+        e = bytearray(128); e[0:len(nm)] = nm
+        struct.pack_into("<H", e, 64, len(name.encode("utf-16-le")) + 2); e[66] = typ; e[67] = 1
+        struct.pack_into("<I", e, 68, FREESECT); struct.pack_into("<I", e, 72, FREESECT); struct.pack_into("<I", e, 76, child)
+        struct.pack_into("<I", e, 116, start); struct.pack_into("<I", e, 120, size); return bytes(e)
+    data = comp + b"\x00" * ((-len(comp)) % S); nsect = len(data) // S
+    fat = [FREESECT] * (S // 4)
+    for i in range(nsect - 1): fat[i] = i + 1
+    fat[nsect - 1] = ENDOFCHAIN; fat[nsect] = 0xFFFFFFFD; fat[nsect + 1] = ENDOFCHAIN
+    fatbytes = b"".join(struct.pack("<I", x) for x in fat)
+    dirb = dirent("Root Entry", 5, ENDOFCHAIN, 0, child=1) + dirent("Module1", 2, 0, len(comp))
+    dirb += b"\x00" * ((S - (len(dirb) % S)) % S)
+    h = bytearray(512); h[0:8] = bytes([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
+    struct.pack_into("<H", h, 24, 0x3E); struct.pack_into("<H", h, 26, 3); struct.pack_into("<H", h, 28, 0xFFFE)
+    struct.pack_into("<H", h, 30, 9); struct.pack_into("<H", h, 32, 6)
+    struct.pack_into("<I", h, 44, 1); struct.pack_into("<I", h, 48, nsect + 1); struct.pack_into("<I", h, 56, 4096)
+    struct.pack_into("<I", h, 60, ENDOFCHAIN); struct.pack_into("<I", h, 68, ENDOFCHAIN)
+    struct.pack_into("<I", h, 76, nsect)
+    for i in range(1, 109): struct.pack_into("<I", h, 76 + i * 4, FREESECT)
+    return bytes(h) + data + fatbytes + dirb
+w("47_macro.doc", ole_with_macro(F("vba_macro")), F("vba_macro"))
+
 open(os.path.join(os.path.dirname(OUT.rstrip("/")), "expected.txt"), "w").write("\n".join(expected) + "\n")
 print(len(expected), "flags hidden")

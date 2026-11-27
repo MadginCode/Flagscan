@@ -20,13 +20,15 @@ pub struct Modules {
     pub stego: bool,
     /// single and short repeating-key XOR (known-plaintext on the flag prefix)
     pub xor: bool,
-    /// Caesar / ROT-N, ROT47, Atbash, reversed text
+    /// Caesar / ROT-N, ROT47, Atbash, Vigenere, reversed text
     pub rot: bool,
+    /// QR codes and barcodes in images
+    pub qr: bool,
 }
 
 impl Default for Modules {
     fn default() -> Self {
-        Self { encodings: true, archives: true, metadata: true, carving: true, stego: true, xor: true, rot: true }
+        Self { encodings: true, archives: true, metadata: true, carving: true, stego: true, xor: true, rot: true, qr: true }
     }
 }
 
@@ -49,6 +51,12 @@ pub struct ScanConfig {
     pub max_node_size: usize,
     /// Passwords tried on encrypted zip / 7z entries (plus a built-in short list).
     pub passwords: Vec<String>,
+    /// Optional path to a wordlist file (one password per line, e.g. rockyou.txt).
+    pub wordlist: String,
+    /// Give up on a single input file after this many milliseconds (0 = no limit).
+    pub file_timeout_ms: u64,
+    /// Worker threads for scanning a folder (0 = number of CPUs).
+    pub threads: usize,
     pub modules: Modules,
 }
 
@@ -64,10 +72,16 @@ impl Default for ScanConfig {
             max_file_size: 1024 * 1024 * 1024,
             max_node_size: 128 * 1024 * 1024,
             passwords: vec![],
+            wordlist: String::new(),
+            file_timeout_ms: 0,
+            threads: 0,
             modules: Modules::default(),
         }
     }
 }
+
+/// Cap on passwords pulled from a wordlist file, to bound crack time.
+pub const MAX_WORDLIST: usize = 1_000_000;
 
 pub const DEFAULT_PASSWORDS: &[&str] = &[
     "", "password", "infected", "flag", "ctf", "secret", "admin", "123456", "12345678", "1234",
@@ -105,7 +119,25 @@ impl ScanConfig {
             }
         }
         v.extend(DEFAULT_PASSWORDS.iter().map(|p| p.as_bytes().to_vec()));
-        v.dedup();
+        // The user-supplied list and defaults come first (fast common cases); the wordlist,
+        // which can be huge, is appended and tried only if those miss.
+        if !self.wordlist.trim().is_empty() {
+            match std::fs::File::open(self.wordlist.trim()) {
+                Ok(f) => {
+                    use std::io::BufRead;
+                    for line in std::io::BufReader::new(f).lines().map_while(Result::ok).take(MAX_WORDLIST) {
+                        let w = line.trim_end_matches(['\r', '\n']);
+                        if !w.is_empty() {
+                            v.push(w.as_bytes().to_vec());
+                        }
+                    }
+                }
+                Err(e) => eprintln!("wordlist {}: {e}", self.wordlist.trim()),
+            }
+        }
+        // Dedup while preserving order (passwords are tried in order).
+        let mut seen = std::collections::HashSet::new();
+        v.retain(|p| seen.insert(p.clone()));
         v
     }
 }

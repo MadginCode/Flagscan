@@ -1,1 +1,6 @@
 /target
+
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+Cargo.lock.fuzz

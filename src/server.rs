@@ -1,7 +1,7 @@
 //! Local web UI + JSON API.
 
 use crate::config::{FlagMatcher, ScanConfig};
-use crate::engine::{Job, ScanResult, Scanner};
+use crate::engine::{Job, ScanResult};
 use crate::update::{self, UpdateInfo};
 use axum::{
     Json, Router,
@@ -81,6 +81,11 @@ pub async fn serve(opts: ServeOpts) -> anyhow::Result<()> {
         .route("/api/jobs/{id}", get(job_status))
         .route("/api/jobs/{id}/cancel", post(job_cancel))
         .route("/api/jobs/{id}/artifacts/{aid}", get(artifact))
+        .route("/api/jobs/{id}/artifacts/{aid}/planes", get(artifact_planes))
+        .route("/api/jobs/{id}/artifacts/{aid}/spectrogram", get(artifact_spectrogram))
+        .route("/api/jobs/{id}/report", get(report))
+        .route("/api/tools/planes", post(tool_planes).layer(DefaultBodyLimit::disable()))
+        .route("/api/tools/spectrogram", post(tool_spectrogram).layer(DefaultBodyLimit::disable()))
         .route("/api/update", get(update_status).post(update_apply))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state);
@@ -154,7 +159,7 @@ struct ScanReq {
 fn new_job(st: &AppState, cfg: ScanConfig, paths: Vec<PathBuf>, uploads: Option<tempfile::TempDir>) -> Result<String, Response> {
     let matcher = FlagMatcher::new(&cfg).map_err(|e| err(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
     let artifacts = tempfile::Builder::new().prefix("flagscan-art-").tempdir().map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let job = Job::new(Some(artifacts.path().to_path_buf()));
+    let job = Job::with_passwords(Some(artifacts.path().to_path_buf()), cfg.all_passwords());
     let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
     let root = uploads.as_ref().map(|u| u.path().to_path_buf());
     {
@@ -169,7 +174,7 @@ fn new_job(st: &AppState, cfg: ScanConfig, paths: Vec<PathBuf>, uploads: Option<
     }
     tokio::task::spawn_blocking(move || {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Scanner::new(&cfg, &matcher, &job).scan_paths(&paths, root.as_deref());
+            crate::engine::run(&cfg, &matcher, &job, &paths, root.as_deref());
         }));
         if r.is_err() {
             let mut res = job.result.lock().unwrap();
@@ -303,6 +308,88 @@ async fn artifact(State(st): S, AxPath((id, aid)): AxPath<(String, usize)>) -> R
         }
         Err(e) => err(StatusCode::NOT_FOUND, e),
     }
+}
+
+fn artifact_bytes(st: &AppState, id: &str, aid: usize) -> Option<Vec<u8>> {
+    let job = st.jobs.lock().unwrap().get(id).map(|j| j.job.clone())?;
+    let path = job.result.lock().unwrap().artifacts.get(aid).map(|a| a.path.clone())?;
+    std::fs::read(path).ok()
+}
+
+fn planes_json(data: &[u8]) -> Response {
+    match crate::engine::tools::bit_planes(data) {
+        Ok(planes) => {
+            use base64::Engine;
+            let items: Vec<_> = planes.into_iter().map(|p| {
+                serde_json::json!({ "label": p.label, "src": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&p.png)) })
+            }).collect();
+            Json(serde_json::json!({ "planes": items })).into_response()
+        }
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+fn png_response(bytes: Vec<u8>) -> Response {
+    let mut h = HeaderMap::new();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    (h, Body::from(bytes)).into_response()
+}
+
+async fn artifact_planes(State(st): S, AxPath((id, aid)): AxPath<(String, usize)>) -> Response {
+    match artifact_bytes(&st, &id, aid) {
+        Some(d) => planes_json(&d),
+        None => err(StatusCode::NOT_FOUND, "unknown artifact"),
+    }
+}
+
+async fn artifact_spectrogram(State(st): S, AxPath((id, aid)): AxPath<(String, usize)>) -> Response {
+    let Some(d) = artifact_bytes(&st, &id, aid) else { return err(StatusCode::NOT_FOUND, "unknown artifact") };
+    match crate::engine::tools::spectrogram(&d) {
+        Ok(png) => png_response(png),
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn first_upload(mp: &mut Multipart) -> Option<Vec<u8>> {
+    while let Ok(Some(field)) = mp.next_field().await {
+        if field.file_name().is_some() || field.name() == Some("file") {
+            return field.bytes().await.ok().map(|b| b.to_vec());
+        }
+    }
+    None
+}
+
+async fn tool_planes(State(_st): S, mut mp: Multipart) -> Response {
+    match first_upload(&mut mp).await {
+        Some(d) => planes_json(&d),
+        None => err(StatusCode::BAD_REQUEST, "no image uploaded"),
+    }
+}
+
+async fn tool_spectrogram(State(_st): S, mut mp: Multipart) -> Response {
+    let Some(d) = first_upload(&mut mp).await else { return err(StatusCode::BAD_REQUEST, "no audio uploaded") };
+    match crate::engine::tools::spectrogram(&d) {
+        Ok(png) => png_response(png),
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn report(State(st): S, AxPath(id): AxPath<String>, req: Request) -> Response {
+    let job = st.jobs.lock().unwrap().get(&id).map(|j| j.job.clone());
+    let Some(job) = job else { return err(StatusCode::NOT_FOUND, "unknown job") };
+    let res = job.snapshot();
+    let json = req.uri().query().is_some_and(|q| q.contains("json"));
+    let (body, ctype, fname) = if json {
+        (serde_json::to_string_pretty(&res).unwrap_or_default(), "application/json", "flagscan-report.json")
+    } else {
+        (crate::engine::report::markdown_result(&res), "text/markdown; charset=utf-8", "flagscan-report.md")
+    };
+    let mut h = HeaderMap::new();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(ctype));
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{fname}\"")) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    (h, body).into_response()
 }
 
 async fn update_status(State(st): S, req: Request) -> Response {

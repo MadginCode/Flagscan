@@ -47,6 +47,8 @@ pub fn sniff(d: &[u8]) -> Option<&'static str> {
         "zlib"
     } else if d.len() > 13 && d[0] == 0x5d && d[1] == 0 && d[2] == 0 {
         "lzma"
+    } else if s(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") {
+        "ole"
     } else if s(b"OggS") {
         "ogg"
     } else if s(b"ID3") || s(b"fLaC") {
@@ -71,6 +73,7 @@ pub fn ext_for(kind: &str) -> &'static str {
         "bzip2" => "bz2",
         "xz" => "xz",
         "7z" => "7z",
+        "ole" => "ole",
         "zstd" => "zst",
         "rar" => "rar",
         "tar" => "tar",

@@ -85,7 +85,7 @@ fn zip(sc: &Scanner, data: &[u8], kids: &mut Vec<Child>, notes: &mut Vec<String>
             continue;
         }
         let mut cracked = false;
-        for pw in &sc.passwords {
+        for pw in sc.passwords {
             let Ok(mut f) = ar.by_index_decrypt(i, pw) else { continue };
             let mut out = Vec::new();
             // A wrong ZipCrypto password usually fails the CRC check while reading.
@@ -122,7 +122,7 @@ fn tar(data: &[u8], limit: usize, kids: &mut Vec<Child>) {
 fn sevenz(sc: &Scanner, data: &[u8], kids: &mut Vec<Child>, notes: &mut Vec<String>) {
     let limit = sc.cfg.max_node_size;
     let Ok(tmp) = tempfile::tempdir() else { return };
-    for pw in &sc.passwords {
+    for pw in sc.passwords {
         let mut got = Vec::new();
         let pass = sevenz_rust::Password::from(String::from_utf8_lossy(pw).as_ref());
         let r = sevenz_rust::decompress_with_extract_fn_and_password(Cursor::new(data), tmp.path(), pass, |entry, reader, _| {

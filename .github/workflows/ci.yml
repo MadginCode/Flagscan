@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - name: Scan the generated challenge set and require every flag
+        run: |
+          pip install --quiet pillow py7zr zstandard
+          python3 -I tests/make_fixtures.py target/fixtures/files
+          cargo build --release --locked
+          ./target/release/flagscan scan target/fixtures/files -f flag | grep -v '^ ' | sort > found.txt
+          sort target/fixtures/expected.txt > expected.txt
+          missing=$(comm -23 expected.txt found.txt)
+          if [ -n "$missing" ]; then echo "missing flags:"; echo "$missing"; exit 1; fi

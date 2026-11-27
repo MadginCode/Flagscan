@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flagscan</title>
+<style>
+:root {
+  --bg: #e6eaee;
+  --panel: #f6f8fa;
+  --ink: #17202e;
+  --steel: #5b6b80;
+  --line: #c9d1da;
+  --tag: #f4c430;
+  --tag-ink: #2b2100;
+  --ok: #1f7a4d;
+  --bad: #b3261e;
+  --focus: #2457c5;
+  --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", "SF Pro Text", -apple-system, "Noto Sans", Ubuntu, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141a23; --panel: #1c2430; --ink: #dfe6ee; --steel: #8d9bb0; --line: #2e3a4a;
+    --tag: #f4c430; --tag-ink: #2b2100; --ok: #4cc38a; --bad: #ff8a80; --focus: #7aa2ff;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button, input, textarea, select { font: inherit; color: inherit; }
+header { display: flex; align-items: baseline; gap: 16px; padding: 18px 28px 14px; border-bottom: 1px solid var(--line); }
+header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; font-weight: 650; }
+header h1 span { display: inline-block; background: var(--tag); color: var(--tag-ink); padding: 0 6px; border-radius: 3px; margin-left: 2px; }
+header .ver { color: var(--steel); font-size: 13px; }
+#update { margin-left: auto; font-size: 14px; }
+#update button { margin-left: 8px; }
+main { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 60px); }
+aside { border-right: 1px solid var(--line); padding: 20px 22px; background: var(--panel); }
+aside h2 { font-size: 15px; margin: 22px 0 8px; font-weight: 650; }
+aside h2:first-child { margin-top: 0; }
+.hint { color: var(--steel); font-size: 13px; margin: 4px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.chip { font-family: var(--mono); font-size: 13px; background: var(--tag); color: var(--tag-ink); border-radius: 3px; padding: 1px 4px 1px 8px; display: inline-flex; align-items: center; gap: 4px; }
+.chip button { border: 0; background: none; cursor: pointer; padding: 0 4px; color: inherit; font-size: 14px; line-height: 1; }
+.chips input { border: 0; background: none; flex: 1; min-width: 90px; font-family: var(--mono); font-size: 13px; padding: 2px; }
+.chips input:focus { outline: none; }
+.chips:focus-within { outline: 2px solid var(--focus); }
+input[type=text], input[type=number], textarea { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--bg); }
+textarea { font-family: var(--mono); font-size: 13px; resize: vertical; }
+label.row { display: flex; align-items: center; gap: 8px; margin: 4px 0; cursor: pointer; }
+label.row small { color: var(--steel); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+.btn { border: 1px solid var(--ink); background: var(--ink); color: var(--bg); border-radius: 6px; padding: 7px 14px; cursor: pointer; font-weight: 600; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); font-weight: 500; }
+.btn:disabled { opacity: .5; cursor: default; }
+.saved { color: var(--ok); font-size: 13px; margin-left: 8px; }
+section.work { padding: 22px 28px 40px; min-width: 0; }
+.input { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.input input { font-family: var(--mono); font-size: 14px; padding: 9px 10px; }
+#drop { margin-top: 10px; border: 2px dashed var(--line); border-radius: 8px; padding: 18px; text-align: center; color: var(--steel); }
+#drop.over { border-color: var(--focus); color: var(--ink); }
+#drop button { border: 0; background: none; color: var(--focus); text-decoration: underline; cursor: pointer; padding: 0; }
+#status { margin: 22px 0 8px; display: flex; align-items: center; gap: 12px; min-height: 32px; color: var(--steel); font-size: 14px; }
+#status .bar { flex: 1; max-width: 260px; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+#status .bar i { display: block; height: 100%; background: var(--ink); width: 0; transition: width .2s; }
+.err { color: var(--bad); }
+#flags { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.flag { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; position: relative; }
+.flag .val { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.flag code { font-family: var(--mono); font-size: 17px; background: var(--tag); color: var(--tag-ink); padding: 3px 10px; border-radius: 3px; word-break: break-all; }
+.flag .copy { border: 1px solid var(--line); background: transparent; border-radius: 5px; padding: 3px 10px; cursor: pointer; font-size: 13px; }
+ol.chain { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-family: var(--mono); font-size: 12.5px; color: var(--steel); }
+ol.chain li { padding: 1px 6px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+ol.chain li + li::before { content: ""; display: inline-block; width: 14px; height: 1px; background: var(--steel); vertical-align: middle; margin: 0 6px 0 -12px; position: relative; left: -6px; }
+ol.chain li + li { margin-left: 18px; }
+ol.chain li:first-child { color: var(--ink); }
+.more { font-size: 12.5px; color: var(--steel); margin-top: 6px; }
+.empty { color: var(--steel); padding: 30px 0; max-width: 60ch; }
+nav.tabs { display: flex; gap: 4px; margin: 30px 0 0; border-bottom: 1px solid var(--line); }
+nav.tabs button { border: 0; background: none; padding: 8px 12px; cursor: pointer; color: var(--steel); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+nav.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.list { margin: 0; padding: 0; list-style: none; }
+.list li { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.list .path { font-family: var(--mono); font-size: 12px; color: var(--steel); word-break: break-all; }
+.list a { color: var(--focus); font-family: var(--mono); font-size: 13px; }
+.list .size { color: var(--steel); font-size: 12px; margin-left: 6px; }
+@media (max-width: 820px) {
+  main { grid-template-columns: 1fr; }
+  aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  header, section.work { padding-left: 16px; padding-right: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>flag<span>scan</span></h1>
+  <span class="ver" id="ver"></span>
+  <div id="update" role="status"></div>
+</header>
+<main>
+<aside>
+  <h2>Flag format</h2>
+  <div class="chips" id="chips"><input id="chipIn" placeholder="add, e.g. picoCTF{}" aria-label="Add flag format"></div>
+  <p class="hint">The prefix is the text before <code>{</code>. Press Enter to add.</p>
+  <label class="row"><input type="checkbox" id="ci"> Ignore case in the prefix</label>
+  <label class="row"><input type="checkbox" id="generic"> Also report any <code>word{…}</code></label>
+  <h2>Custom regex</h2>
+  <input type="text" id="regex" placeholder="optional, e.g. HTB\{[a-z0-9_]+\}" spellcheck="false">
+
+  <h2>Look inside</h2>
+  <div class="grid2" id="mods"></div>
+
+  <h2>Archive passwords</h2>
+  <textarea id="pw" rows="3" placeholder="one per line" spellcheck="false"></textarea>
+  <p class="hint">Tried on encrypted zip and 7z files, along with a short common list and your flag prefixes.</p>
+
+  <h2>Limits</h2>
+  <label class="row">Chain depth <input type="number" id="depth" min="1" max="40" style="width:80px"></label>
+
+  <p style="margin-top:22px"><button class="btn ghost" id="save">Save as default</button><span class="saved" id="savedMsg" role="status"></span></p>
+</aside>
+
+<section class="work">
+  <div class="input">
+    <input type="text" id="path" placeholder="File or folder path, e.g. ~/ctf/forensics" spellcheck="false" aria-label="File or folder path">
+    <button class="btn" id="scan">Scan</button>
+  </div>
+  <div id="drop">Drop files or folders here, or <button id="pickFiles">choose files</button> / <button id="pickDir">choose a folder</button>.
+    <input type="file" id="fileIn" multiple hidden>
+    <input type="file" id="dirIn" webkitdirectory hidden>
+  </div>
+
+  <div id="status" role="status"></div>
+  <div id="flags"></div>
+
+  <nav class="tabs" role="tablist" id="tabs" hidden>
+    <button role="tab" aria-selected="true" data-tab="notes">Hints</button>
+    <button role="tab" aria-selected="false" data-tab="arts">Extracted files</button>
+  </nav>
+  <ul class="list" id="notes"></ul>
+  <ul class="list" id="arts" hidden></ul>
+</section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api = (url, opts = {}) => fetch(url, { ...opts, headers: { 'x-flagscan': '1', ...(opts.headers || {}) } });
+
+const MODS = [
+  ['encodings', 'Encodings'], ['archives', 'Archives'], ['metadata', 'Metadata'], ['carving', 'Embedded files'],
+  ['stego', 'LSB stego'], ['xor', 'XOR'], ['rot', 'ROT / reverse'],
+];
+let formats = [];
+let job = null, timer = null;
+
+function renderChips() {
+  document.querySelectorAll('#chips .chip').forEach(c => c.remove());
+  const input = $('#chipIn');
+  formats.forEach((f, i) => {
+    const s = document.createElement('span');
+    s.className = 'chip';
+    s.innerHTML = `${esc(f)}<button aria-label="Remove ${esc(f)}">×</button>`;
+    s.querySelector('button').onclick = () => { formats.splice(i, 1); renderChips(); };
+    $('#chips').insertBefore(s, input);
+  });
+}
+$('#chipIn').addEventListener('keydown', e => {
+  const v = e.target.value.trim();
+  if ((e.key === 'Enter' || e.key === ',') && v) {
+    e.preventDefault();
+    if (!formats.includes(v)) formats.push(v);
+    e.target.value = ''; renderChips();
+  } else if (e.key === 'Backspace' && !e.target.value && formats.length) {
+    formats.pop(); renderChips();
+  }
+});
+
+function applyConfig(c) {
+  formats = [...c.formats]; renderChips();
+  $('#ci').checked = c.case_insensitive;
+  $('#generic').checked = c.generic;
+  $('#regex').value = c.regex || '';
+  $('#pw').value = (c.passwords || []).join('\n');
+  $('#depth').value = c.max_depth;
+  $('#mods').innerHTML = MODS.map(([k, l]) =>
+    `<label class="row"><input type="checkbox" data-mod="${k}" ${c.modules[k] ? 'checked' : ''}> ${l}</label>`).join('');
+  baseConfig = c;
+}
+let baseConfig = null;
+function readConfig() {
+  const pending = $('#chipIn').value.trim();
+  if (pending && !formats.includes(pending)) { formats.push(pending); $('#chipIn').value = ''; renderChips(); }
+  const modules = {};
+  document.querySelectorAll('[data-mod]').forEach(i => modules[i.dataset.mod] = i.checked);
+  return {
+    ...baseConfig,
+    formats, modules,
+    case_insensitive: $('#ci').checked,
+    generic: $('#generic').checked,
+    regex: $('#regex').value.trim(),
+    passwords: $('#pw').value.split('\n').map(s => s.trimEnd()).filter(Boolean),
+    max_depth: Math.max(1, parseInt($('#depth').value) || 10),
+  };
+}
+
+$('#save').onclick = async () => {
+  const r = await api('/api/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(readConfig()) });
+  $('#savedMsg').className = r.ok ? 'saved' : 'saved err';
+  $('#savedMsg').textContent = r.ok ? 'Saved' : (await r.json()).error;
+  setTimeout(() => $('#savedMsg').textContent = '', 2500);
+};
+
+function setStatus(html) { $('#status').innerHTML = html; }
+
+async function startPathScan() {
+  const p = $('#path').value.trim();
+  if (!p) { $('#path').focus(); setStatus('<span class="err">Enter a file or folder path, or drop files below.</span>'); return; }
+  localStorage.setItem('flagscan.path', p);
+  const r = await api('/api/scan', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paths: p.split(/\n|;/), config: readConfig() }) });
+  const j = await r.json();
+  if (!r.ok) return setStatus(`<span class="err">${esc(j.error)}</span>`);
+  follow(j.job);
+}
+$('#scan').onclick = startPathScan;
+$('#path').addEventListener('keydown', e => { if (e.key === 'Enter') startPathScan(); });
+try { $('#path').value = localStorage.getItem('flagscan.path') || ''; } catch {}
+
+async function uploadFiles(entries) {
+  if (!entries.length) return;
+  const fd = new FormData();
+  fd.append('config', JSON.stringify(readConfig()));
+  for (const { file, path } of entries) fd.append('file', file, path);
+  setStatus(`Uploading ${entries.length} file${entries.length > 1 ? 's' : ''}…`);
+  const r = await api('/api/upload', { method: 'POST', body: fd });
+  const j = await r.json();
+  if (!r.ok) return setStatus(`<span class="err">${esc(j.error)}</span>`);
+  follow(j.job);
+}
+
+async function walkEntry(entry, prefix, out) {
+  if (entry.isFile) {
+    out.push({ file: await new Promise((ok, ko) => entry.file(ok, ko)), path: prefix + entry.name });
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    let batch;
+    do {
+      batch = await new Promise((ok, ko) => reader.readEntries(ok, ko));
+      for (const e of batch) await walkEntry(e, prefix + entry.name + '/', out);
+    } while (batch.length);
+  }
+}
+const drop = $('#drop');
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, () => drop.classList.remove('over')));
+drop.addEventListener('drop', async e => {
+  e.preventDefault();
+  const items = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  const out = [];
+  if (items.length) for (const it of items) await walkEntry(it, '', out);
+  else for (const f of e.dataTransfer.files) out.push({ file: f, path: f.name });
+  uploadFiles(out);
+});
+$('#pickFiles').onclick = () => $('#fileIn').click();
+$('#pickDir').onclick = () => $('#dirIn').click();
+$('#fileIn').onchange = e => uploadFiles([...e.target.files].map(f => ({ file: f, path: f.name })));
+$('#dirIn').onchange = e => uploadFiles([...e.target.files].map(f => ({ file: f, path: f.webkitRelativePath || f.name })));
+
+function follow(id) {
+  job = id; clearTimeout(timer);
+  $('#flags').innerHTML = ''; $('#notes').innerHTML = ''; $('#arts').innerHTML = '';
+  poll();
+}
+
+async function poll() {
+  const id = job;
+  const r = await api(`/api/jobs/${id}`);
+  if (id !== job) return;
+  if (!r.ok) return setStatus('<span class="err">This scan is no longer available.</span>');
+  const s = await r.json();
+  render(s);
+  if (s.stats.state === 'running' || s.stats.state === '') timer = setTimeout(poll, 400);
+}
+
+function chainHtml(c) { return `<ol class="chain">${c.map(x => `<li>${esc(x)}</li>`).join('')}</ol>`; }
+
+function render(s) {
+  const st = s.stats;
+  const pct = st.files_total ? Math.round(100 * st.files_done / st.files_total) : 0;
+  const secs = (st.elapsed_ms / 1000).toFixed(1);
+  if (st.state === 'running' || st.state === '') {
+    setStatus(`<div class="bar"><i style="width:${pct}%"></i></div>
+      <span>${st.files_done}/${st.files_total} files, ${st.nodes} layers checked</span>
+      <button class="btn ghost" id="cancel">Stop</button>`);
+    $('#cancel').onclick = () => api(`/api/jobs/${job}/cancel`, { method: 'POST' });
+  } else if (st.state === 'error') {
+    setStatus(`<span class="err">${esc(st.error || 'Scan failed')}</span>`);
+  } else {
+    const n = s.findings.length;
+    setStatus(`${st.state === 'cancelled' ? 'Stopped' : 'Finished'} in ${secs}s: ${n} flag${n === 1 ? '' : 's'} in ${st.files_total} file${st.files_total === 1 ? '' : 's'}, ${st.nodes} layers checked${st.budget_hit ? ' (layer limit reached)' : ''}.`);
+  }
+
+  if (s.findings.length) {
+    $('#flags').innerHTML = s.findings.map((f, i) => `
+      <article class="flag">
+        <div class="val"><code>${esc(f.flag)}</code><button class="copy" data-i="${i}">Copy</button></div>
+        ${chainHtml(f.chains[0])}
+        ${f.chains.length > 1 ? `<details class="more"><summary>${f.chains.length - 1} other route${f.chains.length > 2 ? 's' : ''}</summary>${f.chains.slice(1).map(chainHtml).join('')}</details>` : ''}
+      </article>`).join('');
+    document.querySelectorAll('.copy').forEach(b => b.onclick = async () => {
+      await navigator.clipboard.writeText(s.findings[b.dataset.i].flag);
+      b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500);
+    });
+  } else if (st.state && st.state !== 'running') {
+    $('#flags').innerHTML = `<p class="empty">No flag matched. Check the hints and extracted files below: a repaired image or a password-protected archive often holds the next step. You can also turn on “Also report any word{…}” in case the format differs.</p>`;
+  }
+
+  $('#tabs').hidden = !(s.notes.length || s.artifacts.length);
+  $('#tabs [data-tab=notes]').textContent = `Hints (${s.notes.length})`;
+  $('#tabs [data-tab=arts]').textContent = `Extracted files (${s.artifacts.length})`;
+  $('#notes').innerHTML = s.notes.map(n => `<li>${esc(n.message)}<div class="path">${esc(n.chain.join('  ›  '))}</div></li>`).join('');
+  $('#arts').innerHTML = s.artifacts.map(a => `<li><a href="/api/jobs/${job}/artifacts/${a.id}" download>${esc(a.name)}</a><span class="size">${a.kind}, ${fmtSize(a.size)}</span><div class="path">${esc(a.chain.join('  ›  '))}</div></li>`).join('');
+}
+function fmtSize(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
+
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
+  $('#notes').hidden = b.dataset.tab !== 'notes';
+  $('#arts').hidden = b.dataset.tab !== 'arts';
+});
+
+async function checkUpdate(refresh) {
+  try {
+    const r = await api('/api/update' + (refresh ? '?refresh=1' : ''));
+    const u = await r.json();
+    if (u.available) {
+      $('#update').innerHTML = `Version ${esc(u.latest)} is available.<button class="btn" id="doUpdate">Update and restart</button>`;
+      $('#doUpdate').onclick = applyUpdate;
+    } else if (!u.latest && !u.error) {
+      setTimeout(() => checkUpdate(false), 3000);
+    }
+  } catch {}
+}
+async function applyUpdate() {
+  $('#update').textContent = 'Downloading update…';
+  const r = await api('/api/update', { method: 'POST' });
+  const j = await r.json();
+  if (!r.ok) { $('#update').innerHTML = `<span class="err">Update failed: ${esc(j.error)}</span>`; return; }
+  if (!j.updated) { $('#update').textContent = 'Already up to date.'; return; }
+  $('#update').textContent = `Updated to ${j.version}. Restarting…`;
+  const wait = async () => {
+    try { const r = await fetch('/api/config'); if (r.ok) return location.reload(); } catch {}
+    setTimeout(wait, 700);
+  };
+  setTimeout(wait, 1500);
+}
+
+(async () => {
+  const r = await api('/api/config');
+  const j = await r.json();
+  $('#ver').textContent = 'v' + j.version;
+  applyConfig(j.config);
+  checkUpdate(false);
+})();
+</script>
+</body>
+</html>

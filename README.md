@@ -78,4 +78,4 @@ The API can read any file the user can, so the server binds to `127.0.0.1` only,
 
 ## Not covered
 
-Visual stego (a flag drawn in a bit plane or spectrogram) needs eyes: open the file in StegSolve or Audacity. steghide/outguess-protected JPEGs need a passphrase cracker (stegseek). RAR archives are flagged but not extracted. Memory images are only string-scanned; use Volatility for real analysis.
+Visual stego (a flag drawn in a bit plane or spectrogram) can't be read automatically, but the web UI's **Stego tools** render every bit plane of an image and the spectrogram of a WAV so you can spot it; there's also a hex viewer on each extracted file. For anything deeper, open the file in StegSolve or Audacity. steghide/outguess-protected JPEGs need a passphrase cracker (stegseek). RAR archives are flagged but not extracted. Memory images are only string-scanned; use Volatility for real analysis.

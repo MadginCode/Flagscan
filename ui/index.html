@@ -93,6 +93,21 @@ nav.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: va
   header, section.work { padding-left: 16px; padding-right: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+.link { border: 0; background: none; color: var(--focus); cursor: pointer; font-size: 12.5px; padding: 0 4px; text-decoration: underline; }
+#toolDrop { border: 2px dashed var(--line); border-radius: 8px; padding: 16px; text-align: center; color: var(--steel); }
+#toolDrop.over { border-color: var(--focus); color: var(--ink); }
+#toolDrop button { border: 0; background: none; color: var(--focus); text-decoration: underline; cursor: pointer; }
+#modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 50; }
+#modal .sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; max-width: min(1100px, 95vw); max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.sheetbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.sheetbar button { border: 0; background: none; font-size: 22px; line-height: 1; cursor: pointer; color: var(--steel); }
+#modalBody { overflow: auto; padding: 14px 16px; }
+#modalBody img { image-rendering: pixelated; background: #0008; }
+.planeGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.planeGrid figure { margin: 0; text-align: center; font-family: var(--mono); font-size: 11px; color: var(--steel); }
+.planeGrid img { width: 100%; border: 1px solid var(--line); border-radius: 4px; }
+.hex { font-family: var(--mono); font-size: 12px; white-space: pre; line-height: 1.45; margin: 0; }
+.spinner { color: var(--steel); padding: 20px; }
 </style>
 </head>
 <body>
@@ -146,8 +161,19 @@ nav.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: va
   </nav>
   <ul class="list" id="notes"></ul>
   <ul class="list" id="arts" hidden></ul>
+
+  <h2 style="margin-top:34px">Stego tools</h2>
+  <p class="hint" style="margin-bottom:8px">Drop any image to see its bit planes, or a WAV to see its spectrogram. Use this for flags that are drawn into a plane or the audio, which the scanner can't read on its own.</p>
+  <div id="toolDrop">Drop an image or WAV here, or <button id="toolPick">choose a file</button>.<input type="file" id="toolIn" hidden></div>
 </section>
 </main>
+
+<div id="modal" hidden>
+  <div class="sheet">
+    <div class="sheetbar"><strong id="modalTitle"></strong><button id="modalClose" aria-label="Close">×</button></div>
+    <div id="modalBody"></div>
+  </div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -335,8 +361,91 @@ function render(s) {
   $('#tabs [data-tab=notes]').textContent = `Hints (${s.notes.length})`;
   $('#tabs [data-tab=arts]').textContent = `Extracted files (${s.artifacts.length})`;
   $('#notes').innerHTML = s.notes.map(n => `<li>${esc(n.message)}<div class="path">${esc(n.chain.join('  ›  '))}</div></li>`).join('');
-  $('#arts').innerHTML = s.artifacts.map(a => `<li><a href="/api/jobs/${job}/artifacts/${a.id}" download>${esc(a.name)}</a><span class="size">${a.kind}, ${fmtSize(a.size)}</span><div class="path">${esc(a.chain.join('  ›  '))}</div></li>`).join('');
+  const IMG = ['png', 'jpeg', 'gif', 'bmp', 'tiff', 'webp'];
+  $('#arts').innerHTML = s.artifacts.map(a => {
+    const tools = [`<button class="link" data-act="hex" data-aid="${a.id}" data-name="${esc(a.name)}">hex</button>`];
+    if (IMG.includes(a.kind)) tools.push(`<button class="link" data-act="planes" data-aid="${a.id}">bit planes</button>`);
+    if (a.kind === 'wav') tools.push(`<button class="link" data-act="spec" data-aid="${a.id}">spectrogram</button>`);
+    return `<li><a href="/api/jobs/${job}/artifacts/${a.id}" download>${esc(a.name)}</a><span class="size">${a.kind}, ${fmtSize(a.size)}</span> ${tools.join(' ')}<div class="path">${esc(a.chain.join('  ›  '))}</div></li>`;
+  }).join('');
+  $('#arts').querySelectorAll('button[data-act]').forEach(b => b.onclick = () => {
+    const aid = b.dataset.aid;
+    if (b.dataset.act === 'hex') showHex(`/api/jobs/${job}/artifacts/${aid}`, b.dataset.name);
+    else if (b.dataset.act === 'planes') showPlanes(`/api/jobs/${job}/artifacts/${aid}/planes`, 'Bit planes');
+    else showImage(`/api/jobs/${job}/artifacts/${aid}/spectrogram`, 'Spectrogram');
+  });
 }
+
+// ---- modal viewers ----
+function openModal(title) {
+  $('#modalTitle').textContent = title;
+  $('#modalBody').innerHTML = '<div class="spinner">Rendering…</div>';
+  $('#modal').hidden = false;
+}
+function closeModal() { $('#modal').hidden = true; $('#modalBody').innerHTML = ''; }
+$('#modalClose').onclick = closeModal;
+$('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').hidden) closeModal(); });
+
+async function showPlanes(url, title) {
+  openModal(title);
+  try {
+    const r = await api(url);
+    const j = await r.json();
+    if (!r.ok) { $('#modalBody').innerHTML = `<p class="err">${esc(j.error)}</p>`; return; }
+    $('#modalBody').innerHTML = `<div class="planeGrid">${j.planes.map(p => `<figure><img src="${p.src}" alt="${esc(p.label)}"><figcaption>${esc(p.label)}</figcaption></figure>`).join('')}</div>`;
+  } catch (e) { $('#modalBody').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+async function showImage(url, title) {
+  openModal(title);
+  try {
+    const r = await api(url);
+    if (!r.ok) { $('#modalBody').innerHTML = `<p class="err">${esc((await r.json()).error)}</p>`; return; }
+    const blob = await r.blob();
+    $('#modalBody').innerHTML = `<img src="${URL.createObjectURL(blob)}" style="max-width:100%">`;
+  } catch (e) { $('#modalBody').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+async function showHex(url, name) {
+  openModal(`Hex — ${name}`);
+  try {
+    const r = await api(url);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const n = Math.min(buf.length, 65536);
+    let out = '';
+    for (let i = 0; i < n; i += 16) {
+      const row = buf.subarray(i, i + 16);
+      const hex = [...row].map(b => b.toString(16).padStart(2, '0')).join(' ').padEnd(47);
+      const asc = [...row].map(b => b >= 32 && b < 127 ? String.fromCharCode(b) : '.').join('');
+      out += i.toString(16).padStart(8, '0') + '  ' + hex + '  ' + asc + '\n';
+    }
+    if (buf.length > n) out += `\n… ${fmtSize(buf.length - n)} more\n`;
+    $('#modalBody').innerHTML = `<pre class="hex">${esc(out)}</pre>`;
+  } catch (e) { $('#modalBody').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+
+// ---- standalone stego tools ----
+async function toolUpload(file) {
+  const fd = new FormData(); fd.append('file', file, file.name);
+  const isWav = /\.wav$/i.test(file.name) || file.type.includes('audio');
+  openModal((isWav ? 'Spectrogram' : 'Bit planes') + ' — ' + file.name);
+  try {
+    const r = await api(isWav ? '/api/tools/spectrogram' : '/api/tools/planes', { method: 'POST', body: fd });
+    if (!r.ok) { $('#modalBody').innerHTML = `<p class="err">${esc((await r.json()).error)}</p>`; return; }
+    if (isWav) {
+      const blob = await r.blob();
+      $('#modalBody').innerHTML = `<img src="${URL.createObjectURL(blob)}" style="max-width:100%">`;
+    } else {
+      const j = await r.json();
+      $('#modalBody').innerHTML = `<div class="planeGrid">${j.planes.map(p => `<figure><img src="${p.src}" alt="${esc(p.label)}"><figcaption>${esc(p.label)}</figcaption></figure>`).join('')}</div>`;
+    }
+  } catch (e) { $('#modalBody').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+const td = $('#toolDrop');
+['dragenter', 'dragover'].forEach(t => td.addEventListener(t, e => { e.preventDefault(); td.classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => td.addEventListener(t, () => td.classList.remove('over')));
+td.addEventListener('drop', e => { e.preventDefault(); if (e.dataTransfer.files[0]) toolUpload(e.dataTransfer.files[0]); });
+$('#toolPick').onclick = () => $('#toolIn').click();
+$('#toolIn').onchange = e => { if (e.target.files[0]) toolUpload(e.target.files[0]); };
 function fmtSize(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
 
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {

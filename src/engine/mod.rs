@@ -12,6 +12,7 @@ pub mod encodings;
 pub mod formats;
 pub mod stego;
 pub mod http;
+pub mod tools;
 pub mod qr;
 pub mod report;
 pub mod util;

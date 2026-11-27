@@ -81,7 +81,11 @@ pub async fn serve(opts: ServeOpts) -> anyhow::Result<()> {
         .route("/api/jobs/{id}", get(job_status))
         .route("/api/jobs/{id}/cancel", post(job_cancel))
         .route("/api/jobs/{id}/artifacts/{aid}", get(artifact))
+        .route("/api/jobs/{id}/artifacts/{aid}/planes", get(artifact_planes))
+        .route("/api/jobs/{id}/artifacts/{aid}/spectrogram", get(artifact_spectrogram))
         .route("/api/jobs/{id}/report", get(report))
+        .route("/api/tools/planes", post(tool_planes).layer(DefaultBodyLimit::disable()))
+        .route("/api/tools/spectrogram", post(tool_spectrogram).layer(DefaultBodyLimit::disable()))
         .route("/api/update", get(update_status).post(update_apply))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state);
@@ -303,6 +307,70 @@ async fn artifact(State(st): S, AxPath((id, aid)): AxPath<(String, usize)>) -> R
             (h, Body::from(bytes)).into_response()
         }
         Err(e) => err(StatusCode::NOT_FOUND, e),
+    }
+}
+
+fn artifact_bytes(st: &AppState, id: &str, aid: usize) -> Option<Vec<u8>> {
+    let job = st.jobs.lock().unwrap().get(id).map(|j| j.job.clone())?;
+    let path = job.result.lock().unwrap().artifacts.get(aid).map(|a| a.path.clone())?;
+    std::fs::read(path).ok()
+}
+
+fn planes_json(data: &[u8]) -> Response {
+    match crate::engine::tools::bit_planes(data) {
+        Ok(planes) => {
+            use base64::Engine;
+            let items: Vec<_> = planes.into_iter().map(|p| {
+                serde_json::json!({ "label": p.label, "src": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&p.png)) })
+            }).collect();
+            Json(serde_json::json!({ "planes": items })).into_response()
+        }
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+fn png_response(bytes: Vec<u8>) -> Response {
+    let mut h = HeaderMap::new();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    (h, Body::from(bytes)).into_response()
+}
+
+async fn artifact_planes(State(st): S, AxPath((id, aid)): AxPath<(String, usize)>) -> Response {
+    match artifact_bytes(&st, &id, aid) {
+        Some(d) => planes_json(&d),
+        None => err(StatusCode::NOT_FOUND, "unknown artifact"),
+    }
+}
+
+async fn artifact_spectrogram(State(st): S, AxPath((id, aid)): AxPath<(String, usize)>) -> Response {
+    let Some(d) = artifact_bytes(&st, &id, aid) else { return err(StatusCode::NOT_FOUND, "unknown artifact") };
+    match crate::engine::tools::spectrogram(&d) {
+        Ok(png) => png_response(png),
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn first_upload(mp: &mut Multipart) -> Option<Vec<u8>> {
+    while let Ok(Some(field)) = mp.next_field().await {
+        if field.file_name().is_some() || field.name() == Some("file") {
+            return field.bytes().await.ok().map(|b| b.to_vec());
+        }
+    }
+    None
+}
+
+async fn tool_planes(State(_st): S, mut mp: Multipart) -> Response {
+    match first_upload(&mut mp).await {
+        Some(d) => planes_json(&d),
+        None => err(StatusCode::BAD_REQUEST, "no image uploaded"),
+    }
+}
+
+async fn tool_spectrogram(State(_st): S, mut mp: Multipart) -> Response {
+    let Some(d) = first_upload(&mut mp).await else { return err(StatusCode::BAD_REQUEST, "no audio uploaded") };
+    match crate::engine::tools::spectrogram(&d) {
+        Ok(png) => png_response(png),
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
     }
 }
 
